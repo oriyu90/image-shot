@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 独自デザイントークン。純黒を使わない低反射の暗色ニュートラル（01_製品仕様書.md §4.3）。 -->
+<resources>
+    <color name="editor_surface">#1A1A1A</color>
+    <color name="app_background">#141414</color>
+    <color name="text_primary">#EDEDED</color>
+</resources>

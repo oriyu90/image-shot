@@ -1,0 +1,66 @@
+# Image Shot — 依存バージョン正本（02_実装定義書.md §1「バージョン管理」に基づく）
+# 2026-10-18 時点の安定版。出荷前に third_party.lock / SBOM と突き合わせること。
+[versions]
+agp = "8.13.2"
+kotlin = "2.2.21"
+ksp = "2.2.21-2.0.5"
+junit = "4.13.2"
+
+coreKtx = "1.17.0"
+# activity 1.11 は compose 1.9+ 前提の世代のため、compose 1.8.x 系に合わせ 1.10.1。
+activityCompose = "1.10.1"
+lifecycle = "2.9.4"
+navigation = "2.9.5"
+# Coil 3.3.0 が JetBrains Compose 1.8.2（→ androidx.compose 1.8.x）を strictly で要求するため、
+# 本雛形は compose 1.8.x / material3 1.3.2 の BOM 系統に合わせる（compileSdk 36 で成立）。
+# BOM 2026.x（compose 1.11/1.12）への更新は Kotlin 正本の3.x移行と Coil 更新とセットで再検証。
+composeBom = "2025.06.01"
+
+room = "2.8.5"
+workManager = "2.10.5"
+kotlinxSerializationJson = "1.11.0"
+kotlinxCoroutines = "1.10.2"
+
+# Coil 3.6.x は JetBrains Compose 1.12 (androidx.compose 1.12 = compileSdk 37 必須) を
+# strictly で要求するため、compileSdk=36 の本雛形では 3.5.0（androidx.compose 1.11 系）に留める。
+# Coil 3.4+ は JetBrains Compose 1.9+/1.11/1.12 各系統と kotlin-stdlib 2.3.10+/2.4 を
+# 要求する。Kotlin 2.2.x 正本と compose=compileSdk 36 制約の組合せでは 3.3.0
+# （JetBrains Compose 1.8.2 / stdlib 2.2.0 系）が整合する。Coil更新は Kotlin 3.x 正本化と同時に再検証。
+coil = "3.3.0"
+
+[libraries]
+androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
+androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activityCompose" }
+androidx-lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycle" }
+androidx-lifecycle-viewmodel-compose = { module = "androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "lifecycle" }
+
+androidx-navigation-compose = { module = "androidx.navigation:navigation-compose", version.ref = "navigation" }
+
+compose-bom = { module = "androidx.compose:compose-bom", version.ref = "composeBom" }
+compose-ui = { module = "androidx.compose.ui:ui" }
+compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling" }
+compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview" }
+compose-foundation = { module = "androidx.compose.foundation:foundation" }
+compose-material3 = { module = "androidx.compose.material3:material3" }
+
+room-runtime = { module = "androidx.room:room-runtime", version.ref = "room" }
+room-ktx = { module = "androidx.room:room-ktx", version.ref = "room" }
+room-compiler = { module = "androidx.room:room-compiler", version.ref = "room" }
+
+work-runtime-ktx = { module = "androidx.work:work-runtime-ktx", version.ref = "workManager" }
+
+kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerializationJson" }
+kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "kotlinxCoroutines" }
+
+coil-compose = { module = "io.coil-kt.coil3:coil-compose", version.ref = "coil" }
+
+junit = { module = "junit:junit", version.ref = "junit" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+android-library = { id = "com.android.library", version.ref = "agp" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
