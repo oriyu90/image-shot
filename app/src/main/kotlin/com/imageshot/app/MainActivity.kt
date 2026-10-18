@@ -3,6 +3,10 @@ package com.imageshot.app
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.ui.Modifier
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
@@ -33,6 +37,14 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             ImageShotTheme {
+                // Android 16 の強制 edge-to-edge（targetSdk 36）に対応（edge-to-edge skill）。
+                // 各feature画面がsystemBars分を考慮していないため、ホスト側で一括適用する。
+                // TODO(M2): 各featureのScaffold自己是inset管理へ移行。
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .systemBarsPadding(),
+                ) {
                 val navController = rememberNavController()
                 NavHost(navController = navController, startDestination = "library") {
                     composable("library") {
@@ -100,6 +112,7 @@ class MainActivity : ComponentActivity() {
                             },
                         )
                     }
+                }
                 }
             }
         }
