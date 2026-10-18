@@ -36,15 +36,16 @@ object ExportStateMachine {
         else -> false
     }
 
-    /** 隣接遷移の合法性（呼び出し側での契約不完全検出用；DAO直書を抑止する）。 */
+    /**
+     * 隣接遷移の合法性（呼び出し側での契約不完全検出用；DAO直書を抑止する）。
+     * 終端状態（COMPLETE / FAILED_PERMANENT / CANCELLED）からの出遷移は一切禁止
+     * （再開は「再試行」として QUEUED 経由でのみ。KDoc の記述に合致させる遷移制限の修正）。
+     */
     fun canTransition(from: State, to: State): Boolean {
         if (from == to) return false
+        if (isTerminalState(from)) return false
         if (to == State.FAILED_RETRYABLE || to == State.FAILED_PERMANENT || to == State.CANCELLED) {
-            return from != State.COMPLETE
-        }
-        if (isTerminalState(from)) {
-            // 終端からの再開は「再試行」として QUEUED 経由でのみ行える。
-            return false
+            return true
         }
         if (to == State.QUEUED) return false // QUEUED のみエントリ点。飛び戻りは禁止。
         val fromIdx = FORWARD_ORDER.indexOf(from)

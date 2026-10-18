@@ -14,14 +14,11 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
-import androidx.work.WorkManager
-import com.imageshot.core.model.ExportRequest
 import com.imageshot.core.model.ImageOpResult
 import com.imageshot.feature.editor.EditorScreen
 import com.imageshot.feature.editor.EditorViewModel
 import com.imageshot.feature.export.ExportScreen
 import com.imageshot.feature.export.ExportViewModel
-import com.imageshot.feature.export.WorkManagerExportJobScheduler
 import com.imageshot.feature.library.LibraryScreen
 import com.imageshot.feature.library.LibraryViewModel
 import kotlinx.coroutines.launch
@@ -79,34 +76,38 @@ class MainActivity : ComponentActivity() {
                             onUndo = vm::undo,
                             onRedo = vm::redo,
                             onBeforeChanged = vm::setBeforeVisible,
-                            onExport = { navController.navigate("export") },
+                            // route arg 名は documentId だが実際に渡すのは assetId
+                            // （正本 documentId は ExportViewModel が EditStore.ensureDocument で解決）。
+                            onExport = { navController.navigate("export/$it") },
                         )
                     }
-                    composable("export") {
+                    composable("export/{documentId}") { entry ->
+                        val assetIdArg = entry.arguments?.getString("documentId").orEmpty()
                         val scope = rememberCoroutineScope()
                         val vm: ExportViewModel =
-                            viewModel { ExportViewModel(container.exportJobDao) }
+                            viewModel(key = assetIdArg) {
+                                ExportViewModel(
+                                    assetId = assetIdArg,
+                                    repository = container.exportJobRepository,
+                                    editStore = container.editStore,
+                                    assetDao = container.assetDao,
+                                )
+                            }
                         val exportState by vm.observeJobs().collectAsState()
+                        val settings by vm.settings().collectAsState()
                         ExportScreen(
                             jobs = exportState.jobs,
-                            // キュー登録のみ。実処理は ExportWorker・WorkManager が担う（ADR-010）。
-                            // TODO(M2): 書き出し先URI(SAF/MediaStore)ダイアログと editor からの遷移引数。
-                            onEnqueueDemo = {
+                            settings = settings,
+                            onFormatSelected = vm::chooseFormat,
+                            onQualityChanged = vm::setQuality,
+                            onDestinationPicked = vm::noteDestination,
+                            onEnqueue = {
+                                // キュー登録は正本経路（repository+request ファイル）。WorkManager 割当は
+                                // app 層が VM 帰りの jobId で行う（ADR-010）。実処理は ExportWorker。
                                 scope.launch {
-                                    val enqueued = vm.enqueue(
-                                        ExportRequest(
-                                            documentId = "demo",
-                                            recipeRevision = 0L,
-                                            outputUri = "",
-                                            format = "JPEG",
-                                            quality = 90,
-                                            settingsHash = "demo",
-                                        ),
-                                    )
+                                    val enqueued = vm.enqueue()
                                     if (enqueued is ImageOpResult.Success) {
-                                        WorkManagerExportJobScheduler(
-                                            WorkManager.getInstance(applicationContext),
-                                        ).schedule(enqueued.value)
+                                        container.exportScheduler.schedule(enqueued.value)
                                     }
                                 }
                             },

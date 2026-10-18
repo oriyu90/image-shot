@@ -19,7 +19,8 @@ import kotlinx.coroutines.withContext
  * M1前半で実装した調整ノード（8bit sRGB 一時パイプライン）:
  *   露出EV / コントラスト / ハイライト / シャドウ / 白レベル / 黒レベル /
  *   彩度 / 自然な彩度 / 温度（as-shot 相対）/ 色合い（近似）。
- *   ノードは RecipeToneCurve の式設計（画質未検証・golden 未実施）。
+ *   ノードは RecipeDevelopApplier（純Kotlin共有実装）経由で RecipeToneCurve の式設計に
+ *   委譲する（画質未検証・golden 未実施。書き出し ExportBitmapRenderer も同一の共有実装）。
  *
  * 明示する制約（M1雛形であり、以下を「実装済み」とは報告しない）:
  * - 8bit sRGB 前提の暫定パス。ADR-005 の Linear Rec.2020 float パイプラインではない。
@@ -156,38 +157,18 @@ class SimpleBitmapPhotoRenderer(
     }
 
     /**
-     * 調整適用（8bit sRGB 暫定）。チャンネル LUT 適用 + 画素ごとの彩度/自然な彩度。
-     * パイプライン順（式設計の正本、RecipeToneCurve KDoc 参照）:
-     *   sRGB->線形 → 露出 → 温度利得 → 黒レベル → シャドウ → 白レベル →
-     *   ハイライト → コントラスト → 線形->sRGB（LUT化）→ 彩度/自然な彩度（残差）。
+     * 調整適用（8bit sRGB 暫定）。書き出し（ExportBitmapRenderer.applyTone）と同一ノード実装
+     * （RecipeDevelopApplier.applyToPixels・RecipeToneCurve 正本）に委譲する。
+     * 未実装ノードの有効値が入り込んでも無通知適用はしない（ADR-014）。
+     * カーブ/HSL/masks/geometry はこの段階では読まない（VM 側 warnings で説明）。
      */
     private fun applyDevelop(source: Bitmap, recipe: EditRecipe): Bitmap {
-        val lut = RecipeToneCurve.buildChannelLuts(recipe.develop)
-        val mixer = RecipeToneCurve.ColorMixer(
-            recipe.develop.color.vibrance,
-            recipe.develop.color.saturation,
-        )
-        val develop = recipe.develop
-        // 未実装ノードの有効値が入り込んでも無通知適用はしない（ADR-014）。
-        // カーブ/HSL/masks/geometry はこの段階では読まない（VM 側 warnings で説明）。
-
         val width = source.width
         val height = source.height
         val pixels = IntArray(width * height)
         source.getPixels(pixels, 0, width, 0, 0, width, height)
 
-        val mixBuf = FloatArray(3)
-        for (i in pixels.indices) {
-            val p = pixels[i]
-            val r = lut[(p ushr 16) and 0xFF] / 255.0f
-            val g = lut[256 + ((p ushr 8) and 0xFF)] / 255.0f
-            val b = lut[512 + (p and 0xFF)] / 255.0f
-            mixer.mix(r, g, b, mixBuf)
-            val ir = (mixBuf[0] * 255.0f + 0.5f).toInt().coerceIn(0, 255)
-            val ig = (mixBuf[1] * 255.0f + 0.5f).toInt().coerceIn(0, 255)
-            val ib = (mixBuf[2] * 255.0f + 0.5f).toInt().coerceIn(0, 255)
-            pixels[i] = ((p ushr 24 and 0xFF) shl 24) or (ir shl 16) or (ig shl 8) or ib
-        }
+        RecipeDevelopApplier.applyToPixels(pixels, recipe.develop)
 
         val out = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         out.setPixels(pixels, 0, width, 0, 0, width, height)

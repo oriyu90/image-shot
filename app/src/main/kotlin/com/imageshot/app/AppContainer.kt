@@ -3,6 +3,7 @@ package com.imageshot.app
 import android.app.Application
 import android.content.Context
 import android.net.Uri
+import android.util.Log
 import androidx.work.WorkManager
 import com.imageshot.core.database.EditStore
 import com.imageshot.core.database.ImageShotDatabase
@@ -18,6 +19,10 @@ import com.imageshot.feature.export.ExportJobRepository
 import com.imageshot.feature.export.ExportWorkerDeps
 import com.imageshot.feature.export.WorkManagerExportJobScheduler
 import java.io.File
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 /**
  * 手動 DI コンテナ（Hilt不採用・ADR-018）。プロセス内で単一のDB/リポジトリ/レンダラーを保持する。
@@ -59,9 +64,30 @@ class AppContainer(context: Context) {
     /** WorkManager 実働。ジョブ永続化は WorkManager 自身の制約（ADR-010）。 */
     val exportScheduler = WorkManagerExportJobScheduler(WorkManager.getInstance(context))
 
+    /** プロセス生存中の非UI処理用スコープ（起動復旧走査）。画面側からは結合しない。 */
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     init {
         // Workerへの依存注入。未結線のまま Worker が走ることを禁止（ADR-014: 音なき失敗の禁止）。
         ExportWorkerDeps.install(exportJobRepository, assetDao, exportRenderer, context.contentResolver)
+        // §8.2 / ADR-010: kill・再起動で busy（PREPARING..PUBLISHING）のまま残ったジョブの
+        // 起動時走査（必須）。recoverInterrupted() は request ファイルの有無で
+        // FAILED_RETRYABLE / FAILED_PERMANENT に分類し、staging 半端物のみ廃棄する
+        // （それ以上のファイル削除は行わない）。
+        // 失敗してもアプリ起動を落とさない（結果は DB 正本と Log のみ）。
+        appScope.launch {
+            runCatching { exportJobRepository.recoverInterrupted() }
+                .onSuccess { recovered ->
+                    if (recovered.isNotEmpty()) {
+                        Log.i(LOG_TAG, "export recovery scan: ${recovered.size} job(s) resolved from interruption")
+                    }
+                }
+                .onFailure { Log.w(LOG_TAG, "export recovery scan failed", it) }
+        }
+    }
+
+    private companion object {
+        const val LOG_TAG = "AppContainer"
     }
 }
 

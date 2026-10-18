@@ -89,7 +89,9 @@ class ExportWorker(
         if (isStopped) return cancelled(repository, jobId, attempt)
 
         // ---- 入力URI解決（assetDao 正本）。availability が OK 以外は原本存在を誤認しない（§8.1）----
-        val asset = deps.assetDao.get(request.documentId)
+        // documentId は EditStore が生成する文書キーで assetId とは別物。原本解決キーは
+        // SimpleBitmapPhotoRenderer と同一の recipe.source.assetId（誤照合の修正）。
+        val asset = deps.assetDao.get(request.recipe.source.assetId)
         val sourceUri = if (asset != null && asset.availability == Asset.AVAILABILITY_OK) {
             Uri.parse(asset.sourceUri)
         } else null

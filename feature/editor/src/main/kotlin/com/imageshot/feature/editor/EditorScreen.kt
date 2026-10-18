@@ -76,7 +76,8 @@ fun EditorScreen(
     onUndo: () -> Unit,
     onRedo: () -> Unit,
     onBeforeChanged: (Boolean) -> Unit,
-    onExport: () -> Unit,
+    /** 書き出し画面へ遷移。引数は assetId（documentId は EditStore が assetId から解決）。 */
+    onExport: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -514,7 +515,8 @@ private fun EditorBottomBar(
     onUndo: () -> Unit,
     onRedo: () -> Unit,
     onBeforeChanged: (Boolean) -> Unit,
-    onExport: () -> Unit,
+    /** 書き出し遷移（assetId を渡す）。 */
+    onExport: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Row(
@@ -550,7 +552,7 @@ private fun EditorBottomBar(
             Text("Before/After", color = EditorPalette.textPrimary)
         }
         Button(
-            onClick = onExport,
+            onClick = { onExport(state.assetId) },
             colors = ButtonDefaults.buttonColors(
                 containerColor = EditorPalette.accent,
                 contentColor = EditorPalette.bg,

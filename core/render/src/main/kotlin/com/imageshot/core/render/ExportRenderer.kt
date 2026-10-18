@@ -3,10 +3,6 @@ package com.imageshot.core.render
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.graphics.Canvas
-import android.graphics.ColorMatrix
-import android.graphics.ColorMatrixColorFilter
-import android.graphics.Paint
 import android.net.Uri
 import com.imageshot.core.model.EditRecipe
 import com.imageshot.core.model.ErrorCode
@@ -18,7 +14,6 @@ import java.security.MessageDigest
 import java.util.zip.CRC32
 import kotlin.math.floor
 import kotlin.math.max
-import kotlin.math.pow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.withContext
@@ -27,9 +22,11 @@ import kotlinx.coroutines.withContext
  * 書き出し用フル解像度再現パス（core:render 内の新規ファイル）。
  * プレビュー（SimpleBitmapPhotoRenderer）と同じノード実装・同じパラメータ（§4 処理パイプライン:
  * 「プレビューと書き出しで同じノード実装とパラメータ、違いは品質設定・タイルスケール・精度のみ」）。
+ * develop 適用は RecipeDevelopApplier（純Kotlin共有実装）に委譲する。
  *
  * 【明示する制限（未検証を実装済みと報告しない・ADR-014）】
  * - 8bit sRGB 前提の暫定パス。ADR-005 の Linear Rec.2020 float パイプラインではない。
+ *   develop 適用は CPU 画素ループ（性能実測は未実施・報告書参照）。
  * - EXIF向き・入力ICC・Gainmap は未解決（プレビュー実装と同じ）→ 必ず warnings に明示する。
  * - 出力は新規エンコードのみ。
  * - メタデータ: EXIF/GPS は書き込まない（最小化・GPS除去、§8）。EXIF pass-through は未実装。
@@ -169,42 +166,19 @@ class ExportBitmapRenderer(context: Context) {
 
     /**
      * トーン/色調整（プレビューレンダラーと同一ノード・同一パラメータ、フル解像度で適用）。
+     * 同一実装は RecipeDevelopApplier.applyToPixels（RecipeToneCurve 正本・純Kotlin）へ委譲する。
      * 【明示】カーブ・HSL・マスク・ジオメトリ・レンズ補正・ディテールは未適用。
-     * 非既定値が存在する場合は対応警告を必ず出す（ADR-014）。
+     * 既定値でない場合は buildWarnings 経由で必ず警告する（ADR-014）。
      */
     private fun applyTone(source: Bitmap, recipe: EditRecipe): Bitmap {
-        val tone = recipe.develop.tone
-        val hasEdits =
-            tone.exposureEv != 0.0 || tone.contrast != 0.0 || recipe.develop.color.saturation != 0.0
-        if (!hasEdits) return source
-
-        val exposureScale = 2.0.pow(tone.exposureEv).toFloat().coerceIn(0.05f, 8f)
-        val contrastValue = 1f + tone.contrast.toFloat().coerceIn(-1f, 1f)
-        val saturationValue = (1f + recipe.develop.color.saturation.toFloat()).coerceIn(0f, 2f)
-
-        val matrix = ColorMatrix().apply {
-            setScale(exposureScale, exposureScale, exposureScale, 1f)
-            postConcat(contrastMatrix(contrastValue))
-            postConcat(ColorMatrix().apply { setSaturation(saturationValue) })
-        }
-        val out = Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888)
-        val paint = Paint().apply { colorFilter = ColorMatrixColorFilter(matrix) }
-        Canvas(out).drawBitmap(source, 0f, 0f, paint)
+        val width = source.width
+        val height = source.height
+        val pixels = IntArray(width * height)
+        source.getPixels(pixels, 0, width, 0, 0, width, height)
+        RecipeDevelopApplier.applyToPixels(pixels, recipe.develop)
+        val out = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        out.setPixels(pixels, 0, width, 0, 0, width, height)
         return out
-    }
-
-    private fun contrastMatrix(c: Float): ColorMatrix {
-        val translate = (0.5f - 0.5f * c) * 255f
-        return ColorMatrix().apply {
-            set(
-                floatArrayOf(
-                    c, 0f, 0f, 0f, translate,
-                    0f, c, 0f, 0f, translate,
-                    0f, 0f, c, 0f, translate,
-                    0f, 0f, 0f, 1f, 0f,
-                ),
-            )
-        }
     }
 
     private fun resizeToMaxEdge(source: Bitmap, maxEdgePx: Int): Bitmap {
@@ -218,33 +192,17 @@ class ExportBitmapRenderer(context: Context) {
 
     private fun buildWarnings(recipe: EditRecipe, result: Bitmap, spec: ExportRenderSpec): List<String> {
         val warnings = mutableListOf(
-            // 入力未解析警告は必ず付与する（§6.1、実力を偽らない）。
-            "8bit-sRGB CPU fallback pipeline at export; input ICC/EXIF orientation/gainmap not applied",
+            // 8bit sRGB CPU パイプライン（プレビューと同一ノード実装）は恒常降格として明示（§6.1/ADR-014）。
+            "8bit-sRGB CPU fallback pipeline at export (same node implementation as preview; ADR-005 float pipeline not implemented)",
+            // 入力未解析警告は必ず付与する（§6.1、実力を偽らない）。EXIF/ICC/Gainmap 対応は別PR。
+            "input ICC / EXIF orientation / gainmap not applied at export",
             "export metadata minimized: no EXIF/GPS written; EXIF pass-through not implemented",
         )
         if (spec.format.equals(FORMAT_JPEG, ignoreCase = true)) {
             warnings += "ICC sRGB tag for JPEG not implemented (output assumed sRGB, untagged)"
         }
-        val d = recipe.develop
-        if (d.curve.rgb != listOf(listOf(0.0, 0.0), listOf(1.0, 1.0)) || d.curve.r.isNotEmpty() ||
-            d.curve.g.isNotEmpty() || d.curve.b.isNotEmpty()
-        ) {
-            warnings += "tone curve not applied at export (not implemented)"
-        }
-        if (d.color.vibrance != 0.0 || d.color.hsl.isNotEmpty() ||
-            d.detail.sharpen != 0.0 || d.detail.lumaNoise != 0.0 || d.detail.chromaNoise != 0.0
-        ) {
-            warnings += "vibrance/HSL/detail nodes not applied at export (not implemented)"
-        }
-        val g = recipe.geometry
-        if (g.cropNorm != listOf(0.0, 0.0, 1.0, 1.0) || g.angleDeg != 0.0 || g.mirrorX ||
-            g.lensProfileId != null || g.perspective != null
-        ) {
-            warnings += "geometry/lens corrections not applied at export"
-        }
-        if (recipe.masks.isNotEmpty()) {
-            warnings += "local masks not applied at export"
-        }
+        // この段階で読まないノードは、既定値でないときのみ警告する（develop 適用ノードを偽警告にしない）。
+        warnings += RecipeDevelopApplier.unappliedNodeWarnings(recipe)
         if (recipe.displayIntent != "auto-sdr-hdr") {
             warnings += "displayIntent handling not implemented at export"
         }

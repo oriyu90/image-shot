@@ -16,14 +16,16 @@ object ExportNaming {
 
     /**
      * 重複回避付きの表示ファイル名（拡張子別）。衝突番号は 2 から連番で付与する。
-     * 例: "photo" → "photo.jpg"、"photo (2).jpg"。大文字小文字・拡張子の差分は等価に扱う。
+     * 例: "photo" → "photo.jpg"、"photo (2).jpg"。大文字小文字・拡張子の差分は等価に扱う
+     * （照合は両側小文字化。既存集合のみの小文字化では照合漏れが起こる。重複回避の修正）。
      */
     fun composeUniqueFileName(base: String, ext: String, existingNames: Set<String>): String {
         val baseName = sanitizeBaseName(base)
         fun composed(n: Int): String =
             if (n <= 1) "$baseName.$ext" else "$baseName ($n).$ext"
+        val existingLower = existingNames.mapToLowerSet()
         var n = 1
-        while (composed(n) in existingNames.mapToLowerSet() ) {
+        while (composed(n).lowercase() in existingLower) {
             n++
         }
         return composed(n)
