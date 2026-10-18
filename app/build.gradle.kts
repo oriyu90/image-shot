@@ -47,6 +47,19 @@ android {
                 signingConfig = signingConfigs.getByName("release")
             }
         }
+        // P2: Macrobenchmark 用ビルド型（developer.android.com/macrobenchmark/setup の公式レシピ準拠）。
+        // release を初期化し、library モジュールが benchmark 型を持たないため release にフォールバックさせる。
+        // isMinifyEnabled を release と同じ false に固定しているのは、R8 の有無による variant 差異を
+        // 計測結果に混入させないため（R8 有効化は署名PRで release/benchmark 同時に行う）。
+        create("benchmark") {
+            initWith(getByName("release"))
+            matchingFallbacks += listOf("release")
+            isDebuggable = false
+            isMinifyEnabled = false
+            if (storeFileProp != null && storeFileProp.isFile) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
     }
 
     compileOptions {

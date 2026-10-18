@@ -1,0 +1,11 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- androidx.benchmark plugin の自動 instrumentation 生成を使わない（手動実行方式）。
+         benchmark ルール側は MacrobenchmarkRule(packageName="com.imageshot.app") で
+         被計測アプリを独立起動するため、本体パッケージを targetPackage とする。 -->
+    <instrumentation
+        android:name="com.imageshot.benchmark.MacrobenchmarkRunnerStub"
+        android:targetPackage="com.imageshot.benchmark"
+        android:label="Image Shot Macrobenchmark" />
+
+</manifest>

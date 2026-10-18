@@ -12,6 +12,10 @@
         android:theme="@style/Theme.ImageShot"
         android:supportsRtl="true">
 
+        <!-- Macrobenchmark が非 debuggable ビルドをプロファイル可能にするための最小タグ。
+             権限・データアクセスの拡張なし（shell プロファイラのみ）。 -->
+        <profileable android:shell="true" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"
