@@ -30,4 +30,6 @@ dependencies {
     implementation(project(":core:database"))
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.android)
+
+    testImplementation(libs.junit)
 }

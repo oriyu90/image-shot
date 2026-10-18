@@ -20,6 +20,47 @@ interface AssetDao {
     /** URI失効判定はデータのみ更新する（原本は参照しない／削除しない）。 */
     @Query("UPDATE assets SET availability = :availability, importedAt = importedAt WHERE id = :id")
     suspend fun updateAvailability(id: String, availability: String)
+
+    // ==== 追加（Library-Import担当 M1: 既存メソッドは変更しない追加のみ） ====
+
+    /**
+     * 時系列グリッド（撮影日順。dateTaken不明は importedAt にフォールバック）。
+     * ローカル検索（表示名）を同一クエリに含める（MVP: メタデータ絞り込みはM2）。
+     */
+    @Query(
+        "SELECT * FROM assets WHERE displayName LIKE '%' || :query || '%' ESCAPE '\\' " +
+            "ORDER BY COALESCE(dateTaken, importedAt) DESC",
+    )
+    fun observeByDateTaken(query: String): Flow<List<AssetEntity>>
+
+    /** ローカル検索（表示名）× 表示名順ソート（MVP. M2: メタデータ検索/キーワード）。 */
+    @Query(
+        "SELECT * FROM assets WHERE displayName LIKE '%' || :query || '%' ESCAPE '\\' " +
+            "ORDER BY displayName COLLATE NOCASE ASC",
+    )
+    fun observeByDisplayName(query: String): Flow<List<AssetEntity>>
+
+    /** 同一URIの重複登録検査（ADR-009: 原本複製なし）。 */
+    @Query("SELECT * FROM assets WHERE sourceUri = :sourceUri LIMIT 1")
+    suspend fun getBySourceUri(sourceUri: String): AssetEntity?
+
+    /** URI可用性再検査の走査源（切断状態表示）。Room internal executor 上で実行される。 */
+    @Query("SELECT * FROM assets")
+    suspend fun getAllOnce(): List<AssetEntity>
+
+    /** 遅延 sha-256 ファンガープリントの埋め込み（U01）。 */
+    @Query("UPDATE assets SET imageFingerprint = :fingerprint WHERE id = :id")
+    suspend fun updateFingerprint(id: String, fingerprint: String)
+
+    /** 遅延バックフィル対象の検出。 */
+    @Query("SELECT * FROM assets WHERE imageFingerprint IS NULL")
+    suspend fun findPendingFingerprint(): List<AssetEntity>
+
+    /** 再関連付け（U01 切断状態からの導線）。原本は変更せず参照先と状態のみ更新する。 */
+    @Query(
+        "UPDATE assets SET sourceUri = :sourceUri, availability = :availability WHERE id = :id",
+    )
+    suspend fun updateSourceUri(id: String, sourceUri: String, availability: String)
 }
 
 @Dao
@@ -61,6 +102,15 @@ interface EditRevisionDao {
         documentId: String,
         snapshotNo: Long,
     ): List<EditRevisionEntity>
+
+    /** 履歴再生/Undo遡行の正本読み込み（§3.3）。読み込み専用（append-only 契約を壊さない）。 */
+    @Query("SELECT * FROM edit_revisions WHERE documentId = :documentId ORDER BY revisionNo ASC")
+    suspend fun all(documentId: String): List<EditRevisionEntity>
+
+    @Query(
+        "SELECT * FROM edit_revisions WHERE documentId = :documentId ORDER BY revisionNo DESC LIMIT 1",
+    )
+    suspend fun latest(documentId: String): EditRevisionEntity?
 }
 
 @Dao

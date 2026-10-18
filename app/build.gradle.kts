@@ -18,10 +18,24 @@ android {
         versionName = "0.1.0"
     }
 
-    // 署名設定はこのPRでは意図的に組み込まない（保留）。
-    // local.properties の RELEASE_STORE_* は用意されているが、リリース署名は別PRで実施する。
-    // TODO(release): signingConfigs/release ビルドタイプの組み込みは、キーストア保護方針の
-    //  確認後に追加すること（.jks はコミット対象外）。
+    // 署名設定: local.properties の RELEASE_STORE_* を読む（.jks はコミット対象外）。
+    // パスワードはリポジトリに入れない（ADR-015: 供給網/機密の分離）。
+    val storeFileProp = rootProject.file("local.properties").takeIf { it.isFile }?.let { f ->
+        f.readLines().firstOrNull { it.startsWith("RELEASE_STORE_FILE=") }?.substringAfter("=")?.trim()
+    }?.let { rootProject.file(it) }
+    if (storeFileProp != null && storeFileProp.isFile) {
+        signingConfigs {
+            create("release") {
+                storeFile = storeFileProp
+                storePassword = rootProject.file("local.properties").readLines()
+                    .firstOrNull { it.startsWith("RELEASE_STORE_PASSWORD=") }?.substringAfter("=")?.trim() ?: ""
+                keyAlias = rootProject.file("local.properties").readLines()
+                    .firstOrNull { it.startsWith("RELEASE_KEY_ALIAS=") }?.substringAfter("=")?.trim() ?: ""
+                keyPassword = rootProject.file("local.properties").readLines()
+                    .firstOrNull { it.startsWith("RELEASE_KEY_PASSWORD=") }?.substringAfter("=")?.trim() ?: ""
+            }
+        }
+    }
 
     buildTypes {
         debug {
@@ -29,6 +43,9 @@ android {
         }
         release {
             isMinifyEnabled = false // TODO(release): R8 は署名PRで有効化する
+            if (storeFileProp != null && storeFileProp.isFile) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 

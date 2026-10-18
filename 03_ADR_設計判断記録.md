@@ -157,6 +157,32 @@ ADRは「背景→判断→代替案→効果・代償→検証方法→再検�
 - **検証**: HTTPリクエスト監査、写真名/パス/GPSのフィールド自動検知、権限検査。
 - **再検討**: ユーザー主導の診断添付機能を追加する場合。
 
+## ADR-018 — DI は手動コンテナ（Hilt不採用・雛形段階）
+- **状態**: Provisional
+- **背景**: Sprint A〜C の原型構築でビルド要件（KSP/kapt追加）を減らし検証速度を上げる。仕様書§1はDI構成を強制していない。
+- **判断**: `AppContainer` + 手動Factoryで統一。Hiltへの移植は構造（feature→core依存方向）を壊さない形で可能なまま保つ。
+- **代償**: 依存グラフの静的検査・テスト置換の利便が失われる。
+- **検証**: feature全モジュールのビルド通過、ViewModelテストでの手動注入。
+- **再検討**: モジュール数が増え、注入ミスが検出困難になった場合。
+
+## ADR-019 — ナビゲーションは安定版 navigation-compose
+- **状態**: Accepted (provisional)
+- **背景**: Navigation 3は新世代APIだが本構築時点で安定性と学習コストの評価が未完。
+- **判断**: `androidx.navigation:navigation-compose`を採用。仕様書§4.2のレベントはWindowSizeClass側で吸収し、ナビゲーション構造に持ち込まない。
+- **代替**: Navigation 3の即時採用。
+- **代償**: 誌面 (adaptive list-detail) の2nd pane遷移をNav3が提供するScenesで置き換える将来の移行作業。
+- **検証**: library→editor→exportの戻る挙動、プロセス再作成後の状態回復。
+- **再検討**: Navigation 3安定版との差分確認後。
+
+## ADR-020 — レシピpayloadはJSON+schemaVersionで暫定保存
+- **状態**: Provisional
+- **背景**: 02_実装定義書§3.2はCBOR/Proto相当のバイナリを「許容」とするが、雛形段階での安定CBOR実装（kotlinx-serialization-cbor実験版）はschema互換性の検証不足。
+- **判断**: RoomにはJSON文字列+`schemaVersion`を保存。読み出しはstrictな既知field検証+unknownExtensions隔離（§3.2正規構造と同一）。
+- **代替**: 最初からCBOR/Proto。
+- **代償**: payloadは参照人可読のため改変リスク増加（checksum列で遮蔽、§3.1）。サイズ増。
+- **検証**: schema evolutionテスト（旧版読み出し→移行→再保存、§3.2必須）。
+- **再検討**: CBOR移行時はdouble encode/decode reference testを行ってから。
+
 ## 変更管理
 
 1. ADRを更新する場合、元判断を消さず`Superseded by ADR-xxx`を記録する。
