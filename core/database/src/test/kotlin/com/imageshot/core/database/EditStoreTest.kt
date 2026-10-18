@@ -1,12 +1,18 @@
 package com.imageshot.core.database
 
 import com.imageshot.core.model.AdjustmentId
+import com.imageshot.core.model.EditEventKind
+import com.imageshot.core.model.EditNodeSpecs
 import com.imageshot.core.model.EditRecipe
 import com.imageshot.core.model.ImageOpResult
+import com.imageshot.core.model.LEGACY_EVENT_TYPE_PARAM
 import com.imageshot.core.model.RecipeParameterEdit
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.doubleOrNull
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertFalse
 import org.junit.Test
@@ -173,14 +179,15 @@ class EditStoreTest {
         val store = store(backend)
         val base = bootstrap(store)
         val docId = base.documentId
+        val legacyPayload = """{"path":"develop.tone.exposureEv","value":0.2,"op":"apply"}"""
         backend.revisions += EditRevisionEntity(
             documentId = docId,
             revisionNo = 1L,
-            eventType = EditStore.EVENT_TYPE_PARAM,
-            payloadJson = """{"path":"develop.tone.exposureEv","value":0.2,"op":"apply"}""",
+            eventType = EditEventKind.TONE.id,
+            payloadJson = legacyPayload,
             payloadSchemaVersion = EVENT_PAYLOAD_SCHEMA_VERSION,
             committedAt = 1L,
-            checksum = EditChecksums.revisionChecksum(docId, 1L, EditStore.EVENT_TYPE_PARAM, """{"path":"develop.tone.exposureEv","value":0.2,"op":"apply"}"""),
+            checksum = EditChecksums.revisionChecksum(docId, 1L, EditEventKind.TONE.id, legacyPayload),
         )
         val failure = runBlocking {
             store.commit(docId, 0L, RecipeParameterEdit(AdjustmentId.EXPOSURE.recipePath, 1.0))
@@ -257,6 +264,349 @@ class EditStoreTest {
         assertIs<EditStore.UndoOutcome.Noop>(assertIs<ImageOpResult.Success<EditStore.UndoOutcome>>(outcome).value)
     }
 
+    // ---- 正本列挙 / 既知・未知イベントの永続契約（ADR-022）----
+
+    @Test
+    fun commit_writesCanonicalEventType_bySliderDomain() {
+        val backend = FakeBackend()
+        val store = store(backend)
+        var state = bootstrap(store)
+        state = commit(store, state, AdjustmentId.EXPOSURE, 1.0)
+        state = commit(store, state, AdjustmentId.SATURATION, 30.0)
+        state = commit(store, state, AdjustmentId.TEMPERATURE, -40.0)
+        assertEquals(
+            listOf(
+                EditEventKind.TONE.id,
+                EditEventKind.COLOR.id,
+                EditEventKind.WHITE_BALANCE.id,
+            ),
+            backend.revisions.map { it.eventType },
+        )
+        assertEquals(1, backend.revisions[0].payloadSchemaVersion)
+    }
+
+    @Test
+    fun unknownEventType_isPreservedOnly_appliedNeverAndCounted() {
+        val backend = FakeBackend()
+        val store = store(backend)
+        val base = bootstrap(store)
+        val docId = base.documentId
+        val payload = """{"path":"develop.tone.exposureEv","value":2.0,"op":"apply"}"""
+        val mystery = EditRevisionEntity(
+            documentId = docId,
+            revisionNo = 1L,
+            eventType = "mystery",
+            payloadJson = payload,
+            payloadSchemaVersion = 1,
+            committedAt = 1L,
+            checksum = EditChecksums.revisionChecksum(docId, 1L, "mystery", payload),
+        )
+        backend.revisions += mystery
+        // 疑似シナリオ内で文書カーソルも整合させる（本件の対象は保持挙動）。
+        backend.docs[docId] = backend.docs[docId]!!.copy(currentRevision = 1L)
+
+        val reloaded = assertIs<ImageOpResult.Success<EditStore.EditStoreState>>(
+            runBlocking { store.load(docId) },
+        ).value
+        // 保持: 行は無改写・履歴に現れ・適用はしない（既定値へは落とさない）。
+        assertEquals(listOf(mystery), backend.revisions.toList())
+        assertEquals(1, reloaded.history.size)
+        assertEquals("mystery", reloaded.history.single().eventType)
+        assertEquals(0.0, reloaded.recipe.develop.tone.exposureEv, 1e-9)
+        assertEquals(1, reloaded.decodeSummary.preservedOnly)
+        assertEquals(0, reloaded.decodeSummary.applied)
+        assertTrue(reloaded.decodeSummary.isFullyApplied.not())
+
+        // 往復: 保持後も連続確定は破たんしない（revisionNo は継続、既知イベントは適用）。
+        val next = commit(store, reloaded, AdjustmentId.EXPOSURE, -1.0)
+        assertEquals(2L, next.currentRevision)
+        assertEquals(-1.0, next.recipe.develop.tone.exposureEv, 1e-9)
+        assertEquals(1, next.decodeSummary.applied)
+        assertEquals(1, next.decodeSummary.preservedOnly)
+    }
+
+    @Test
+    fun reservedKindEvent_isPreservedOnly_neverApplied() {
+        val backend = FakeBackend()
+        val store = store(backend)
+        val base = bootstrap(store)
+        val docId = base.documentId
+        // RESERVED 種（M1 では生成しない）が DB に入っている場合でも解釈しない。
+        val payload = """{"points":[[0.0,0.0],[1.0,1.0]]}"""
+        backend.revisions += EditRevisionEntity(
+            documentId = docId,
+            revisionNo = 1L,
+            eventType = EditEventKind.CURVE.id,
+            payloadJson = payload,
+            payloadSchemaVersion = 1,
+            committedAt = 1L,
+            checksum = EditChecksums.revisionChecksum(docId, 1L, EditEventKind.CURVE.id, payload),
+        )
+        val reloaded = assertIs<ImageOpResult.Success<EditStore.EditStoreState>>(
+            runBlocking { store.load(docId) },
+        ).value
+        assertEquals(0.0, reloaded.recipe.develop.tone.exposureEv, 1e-9)
+        assertEquals(1, reloaded.decodeSummary.preservedOnly)
+        assertEquals(0, reloaded.decodeSummary.applied)
+    }
+
+    /**
+     * P4: 新種（curve）に対する「旧構築の解読動作」の維持検証。
+     * - P3 までの構築では curve は RESERVED_M2 であり、どんな payload でも
+     *   PRESERVED_ONLY（適用しない・既定値に落とさない）だった。
+     * - 旧 payload 形状（本構築の v1 形状でない点列）が DB に混入した場合も、
+     *   現行構築は同規約（preservedOnly）を維持する。旧バージョン→本バージョンの
+     *   将来データは（旧 payload が v1 新形状のため）本構築では「適用」側へ回る —
+     *   逆方向（本構築→旧構築）では RESERVED のまま拒否解釈されるため、
+     *   行は無改写で保持される（ここでは現行構築側の保持挙動を同等形状で再現検証）。
+     */
+    @Test
+    fun curveKindPayload_inOldShape_staysPreservedOnly_matchingLegacyDecode() {
+        val backend = FakeBackend()
+        val store = store(backend)
+        val base = bootstrap(store)
+        val docId = base.documentId
+        // 本構築の commitCurve と同 eventType を使いながら、path を持たない旧想定 payload。
+        val payload = """{"path":"develop.curve.rgb","value":1.0,"op":"apply"}"""
+        backend.revisions += EditRevisionEntity(
+            documentId = docId,
+            revisionNo = 1L,
+            eventType = EditEventKind.CURVE.id,
+            payloadJson = payload,
+            payloadSchemaVersion = 1,
+            committedAt = 1L,
+            checksum = EditChecksums.revisionChecksum(docId, 1L, EditEventKind.CURVE.id, payload),
+        )
+        // 疑似シナリオ内で文書カーソルも整合させる（本件の対象は保持挙動）。
+        backend.docs[docId] = backend.docs[docId]!!.copy(currentRevision = 1L)
+        val reloaded = assertIs<ImageOpResult.Success<EditStore.EditStoreState>>(
+            runBlocking { store.load(docId) },
+        ).value
+        // 旧形状は既定何に落とされず、preservedOnly として明示集計される。
+        assertEquals(0, reloaded.decodeSummary.applied)
+        assertEquals(1, reloaded.decodeSummary.preservedOnly)
+        assertEquals(false, reloaded.decodeSummary.isFullyApplied)
+        // 未解釈でも連続確定は破たんしない。
+        val next = commit(store, reloaded, AdjustmentId.EXPOSURE, 1.0)
+        assertEquals(2L, next.currentRevision)
+        assertEquals(1.0, next.recipe.develop.tone.exposureEv, 1e-9)
+        assertEquals(1, next.decodeSummary.preservedOnly)
+    }
+
+    @Test
+    fun higherPayloadSchemaVersion_isUnsupported_notAppliedAndCounted() {
+        val backend = FakeBackend()
+        val store = store(backend)
+        val base = bootstrap(store)
+        val docId = base.documentId
+        val payload = """{"path":"develop.tone.exposureEv","value":3.0,"op":"apply"}"""
+        backend.revisions += EditRevisionEntity(
+            documentId = docId,
+            revisionNo = 1L,
+            eventType = EditEventKind.TONE.id,
+            payloadJson = payload,
+            payloadSchemaVersion = 2, // 未来バージョン: 解釈せず保持のみ。
+            committedAt = 1L,
+            checksum = EditChecksums.revisionChecksum(docId, 1L, EditEventKind.TONE.id, payload),
+        )
+        val reloaded = assertIs<ImageOpResult.Success<EditStore.EditStoreState>>(
+            runBlocking { store.load(docId) },
+        ).value
+        assertEquals(0.0, reloaded.recipe.develop.tone.exposureEv, 1e-9) // 3.0 を適用しない。
+        assertEquals(1, reloaded.decodeSummary.unsupportedVersion)
+        assertEquals(0, reloaded.decodeSummary.applied)
+        // 行は無改写。
+        assertEquals(2, backend.revisions.single().payloadSchemaVersion)
+        // codec 契約: 未対応バージョンは明示失敗（既定値へのフォールバック禁止）。
+        assertFailsWith<IllegalArgumentException> {
+            EditRecordCodec.decodeEventPayload(payload, 2)
+        }
+        assertEquals(
+            3.0,
+            (EditRecordCodec.decodeEventPayload(payload, 1)["value"] as JsonPrimitive).doubleOrNull!!,
+            1e-9,
+        )
+    }
+
+    @Test
+    fun legacyParamAlias_stillApplies_forKnownPath() {
+        val backend = FakeBackend()
+        val store = store(backend)
+        val base = bootstrap(store)
+        val docId = base.documentId
+        val payload = """{"path":"develop.color.saturation","value":40.0,"op":"apply"}"""
+        backend.revisions += EditRevisionEntity(
+            documentId = docId,
+            revisionNo = 1L,
+            eventType = LEGACY_EVENT_TYPE_PARAM,
+            payloadJson = payload,
+            payloadSchemaVersion = 1,
+            committedAt = 1L,
+            checksum = EditChecksums.revisionChecksum(
+                docId,
+                1L,
+                LEGACY_EVENT_TYPE_PARAM,
+                payload,
+            ),
+        )
+        val reloaded = assertIs<ImageOpResult.Success<EditStore.EditStoreState>>(
+            runBlocking { store.load(docId) },
+        ).value
+        assertEquals(0.4, reloaded.recipe.develop.color.saturation, 1e-9)
+        assertEquals(1, reloaded.decodeSummary.applied)
+        assertEquals(0, reloaded.decodeSummary.preservedOnly)
+    }
+
+    // ---- P4 ノード種（curve / geometry）の確定・絶対状態 undo/redo ----
+
+    private fun commitCurve(
+        store: EditStore,
+        base: EditStore.EditStoreState,
+        points: List<List<Double>>,
+    ): EditStore.EditStoreState = runBlocking {
+        assertIs<ImageOpResult.Success<EditStore.EditStoreState>>(
+            store.commitCurve(base.documentId, base.currentRevision, points),
+        ).value
+    }
+
+    private fun commitGeometry(
+        store: EditStore,
+        base: EditStore.EditStoreState,
+        geometry: EditRecipe.GeometryParams,
+    ): EditStore.EditStoreState = runBlocking {
+        assertIs<ImageOpResult.Success<EditStore.EditStoreState>>(
+            store.commitGeometry(base.documentId, base.currentRevision, geometry),
+        ).value
+    }
+
+    @Test
+    fun commitCurve_writesCanonicalKind_appliesToRecipe_andNormalizes() {
+        val backend = FakeBackend()
+        val store = store(backend)
+        var state = bootstrap(store)
+        state = commitCurve(store, state, listOf(listOf(0.8, 1.0), listOf(1.0, 0.6), listOf(0.2, 0.0))) // 無順序入力
+        assertEquals(1L, state.currentRevision)
+        assertEquals(EditEventKind.CURVE.id, backend.revisions.single().eventType)
+        // 正規化済み（x 昇順・y クランプ）。
+        assertEquals(
+            listOf(listOf(0.2, 0.0), listOf(0.8, 1.0), listOf(1.0, 0.6)),
+            state.recipe.develop.curve.rgb,
+        )
+        assertTrue(state.canUndo)
+
+        // 不正な点列は FAIL（既定値に落とさない）。
+        val failure = runBlocking {
+            store.commitCurve(state.documentId, state.currentRevision, listOf(listOf(0.5, 0.5)))
+        }
+        assertIs<ImageOpResult.Failure>(failure)
+    }
+
+    @Test
+    fun undoCurve_restoresPreviousPoints_andRedoRestoresIt() {
+        val store = store()
+        var state = bootstrap(store)
+        state = commitCurve(store, state, listOf(listOf(0.0, 0.0), listOf(0.5, 0.7), listOf(1.0, 1.0)))
+        state = commitCurve(store, state, listOf(listOf(0.0, 0.5), listOf(1.0, 1.0)))
+        assertEquals(listOf(0.0, 0.5), state.recipe.develop.curve.rgb[0])
+
+        val afterUndo = assertIs<EditStore.UndoOutcome.Applied>(
+            assertIs<ImageOpResult.Success<EditStore.UndoOutcome>>(
+                runBlocking { store.undo(state.documentId) },
+            ).value,
+        ).state
+        assertEquals(listOf(listOf(0.0, 0.0), listOf(0.5, 0.7), listOf(1.0, 1.0)), afterUndo.recipe.develop.curve.rgb)
+        assertFalse(afterUndo.canUndo)
+        assertTrue(afterUndo.canRedo)
+
+        val afterRedo = assertIs<EditStore.UndoOutcome.Applied>(
+            assertIs<ImageOpResult.Success<EditStore.UndoOutcome>>(
+                runBlocking { store.redo(afterUndo.documentId) },
+            ).value,
+        ).state
+        assertEquals(listOf(listOf(0.0, 0.5), listOf(1.0, 1.0)), afterRedo.recipe.develop.curve.rgb)
+    }
+
+    @Test
+    fun undoFirstCurveEvent_restoresNeutralCurve() {
+        val store = store()
+        var state = bootstrap(store)
+        state = commitCurve(store, state, listOf(listOf(0.25, 0.1), listOf(0.75, 0.9)))
+        val afterUndo = assertIs<EditStore.UndoOutcome.Applied>(
+            assertIs<ImageOpResult.Success<EditStore.UndoOutcome>>(
+                runBlocking { store.undo(state.documentId) },
+            ).value,
+        ).state
+        assertEquals(EditNodeSpecs.CURVE_NEUTRAL_RGB, afterUndo.recipe.develop.curve.rgb)
+    }
+
+    @Test
+    fun commitGeometry_undoGeometry_roundTrip() {
+        val backend = FakeBackend()
+        val store = store(backend)
+        var state = bootstrap(store)
+        state = commitGeometry(
+            store,
+            state,
+            EditRecipe.GeometryParams(
+                cropNorm = listOf(0.1, 0.1, 0.9, 1.0),
+                angleDeg = 90.0,
+                mirrorX = true,
+                mirrorY = true,
+            ),
+        )
+        assertEquals(EditEventKind.GEOMETRY.id, backend.revisions.single().eventType)
+        assertEquals(90.0, state.recipe.geometry.angleDeg, 1e-9)
+        assertTrue(state.recipe.geometry.mirrorX && state.recipe.geometry.mirrorY)
+        assertEquals(listOf(0.1, 0.1, 0.9, 1.0), state.recipe.geometry.cropNorm)
+
+        // 次の状態へ（反転を解消・180°へ）。
+        state = commitGeometry(
+            store,
+            state,
+            EditRecipe.GeometryParams(cropNorm = listOf(0.1, 0.1, 0.9, 1.0), angleDeg = 180.0),
+        )
+        val afterUndo = assertIs<EditStore.UndoOutcome.Applied>(
+            assertIs<ImageOpResult.Success<EditStore.UndoOutcome>>(
+                runBlocking { store.undo(state.documentId) },
+            ).value,
+        ).state
+        assertEquals(90.0, afterUndo.recipe.geometry.angleDeg, 1e-9)
+        assertTrue(afterUndo.recipe.geometry.mirrorX)
+        val afterRedo = assertIs<EditStore.UndoOutcome.Applied>(
+            assertIs<ImageOpResult.Success<EditStore.UndoOutcome>>(
+                runBlocking { store.redo(afterUndo.documentId) },
+            ).value,
+        ).state
+        assertEquals(180.0, afterRedo.recipe.geometry.angleDeg, 1e-9)
+        assertFalse(afterRedo.recipe.geometry.mirrorX)
+    }
+
+    @Test
+    fun commitGeometry_freeAngle_isRejected_noEventAppended() {
+        val backend = FakeBackend()
+        val store = store(backend)
+        val base = bootstrap(store)
+        val failure = runBlocking {
+            store.commitGeometry(base.documentId, base.currentRevision, EditRecipe.GeometryParams(angleDeg = 3.5))
+        }
+        assertIs<ImageOpResult.Failure>(failure)
+        assertEquals(0, backend.revisions.size)
+    }
+
+    @Test
+    fun hslSlider_viaStandardCommit_appliesAndUndoes() {
+        val store = store()
+        var state = bootstrap(store)
+        state = commit(store, state, AdjustmentId.HSL_RED_HUE, 50.0)
+        assertEquals(0.5, state.recipe.develop.color.hsl["red.hue"] ?: 0.0, 1e-9)
+        val afterUndo = assertIs<EditStore.UndoOutcome.Applied>(
+            assertIs<ImageOpResult.Success<EditStore.UndoOutcome>>(
+                runBlocking { store.undo(state.documentId) },
+            ).value,
+        ).state
+        assertEquals(0.0, afterUndo.recipe.develop.color.hsl["red.hue"] ?: 0.0, 1e-9)
+    }
+
     // ---- スナップショット（§3.3: 20–50イベント周期・チェックサムゲート）----
 
     @Test
@@ -318,7 +668,14 @@ class EditStoreTest {
             source = EditRecipe.RecipeSource("asset", "fp"),
             develop = EditRecipe.DevelopParams(
                 tone = EditRecipe.Tone(exposureEv = -2.0, contrast = -1.0, blacks = 1.0),
-                color = EditRecipe.ColorParams(vibrance = -1.0, saturation = 1.0),
+                color = EditRecipe.ColorParams(vibrance = -1.0, saturation = 1.0, hsl = mapOf("red.hue" to 0.5)),
+                curve = EditRecipe.Curve(rgb = listOf(listOf(0.0, 0.1), listOf(0.5, 0.4), listOf(1.0, 1.0))),
+            ),
+            geometry = EditRecipe.GeometryParams(
+                cropNorm = listOf(0.1, 0.2, 0.9, 1.0),
+                angleDeg = 270.0,
+                mirrorX = true,
+                mirrorY = true,
             ),
         )
         val json = EditRecordCodec.encodeRecipe(recipe)
@@ -327,6 +684,7 @@ class EditStoreTest {
         assertTrue(rejected.isFailure)
         val decoded = EditRecordCodec.decodeRecipe(json, RecipeSchemaVersion1)
         assertEquals(recipe.develop, decoded.develop)
+        assertEquals(recipe.geometry, decoded.geometry)
     }
 
     private companion object {

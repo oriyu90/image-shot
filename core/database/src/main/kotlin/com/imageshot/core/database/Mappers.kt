@@ -27,6 +27,18 @@ object EditRecordCodec {
         return element as? JsonObject ?: error("event payload must be a JSON object")
     }
 
+    /**
+     * 永続行の payload 復元 + schemaVersion ゲート（ADR-022）。
+     * - 未対応バージョン（将来バージョンを含む）は既定値へのフォールバックを行わず、require で明示失敗。
+     * - 旧バージョンは移行実装後に受理範囲へ追加する（現行は 1 のみ）。
+     */
+    fun decodeEventPayload(payloadJson: String, payloadSchemaVersion: Int): JsonObject {
+        require(payloadSchemaVersion in 1..EVENT_PAYLOAD_SCHEMA_VERSION) {
+            "unsupported event payload schemaVersion: $payloadSchemaVersion"
+        }
+        return decodeEventPayload(payloadJson)
+    }
+
     fun encodeRecipe(recipe: EditRecipe): String = json.encodeToString(EditRecipe.serializer(), recipe)
 
     /** スキーマ変更時は旧版読み出し+移行+再保存（§3.2）。現状は version 1 のみ。 */

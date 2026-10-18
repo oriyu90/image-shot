@@ -1,4 +1,4 @@
-// core:database — Room (SQLite WAL)。DBは描画APIを知らない（02_実装定義書.md §2 依存方向）。
+// core:database — Room (SQLite)。DBは描画APIを知らない（02_実装定義書.md §2 依存方向）。
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
@@ -36,6 +36,7 @@ dependencies {
 
     api(libs.room.runtime)
     implementation(libs.room.ktx)
+    // ADR-021 未採用のため既定 framework factory を使用
     ksp(libs.room.compiler)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.android)

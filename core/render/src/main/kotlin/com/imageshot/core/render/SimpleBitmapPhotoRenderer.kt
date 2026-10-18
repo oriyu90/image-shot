@@ -24,8 +24,10 @@ import kotlinx.coroutines.withContext
  *
  * 明示する制約（M1雛形であり、以下を「実装済み」とは報告しない）:
  * - 8bit sRGB 前提の暫定パス。ADR-005 の Linear Rec.2020 float パイプラインではない。
- * - 入力ICC/EXIF向き/カーブ/HSL/ディテール/周辺光量/局所マスク/ジオメトリは未適用。
- *   無通知に捨てないため、結果 warnings に常に降格警告を含める（ADR-014）。
+ * - 入力ICC/EXIF向き/ディテール/局所マスクは未適用。無通知に捨てないため、
+ *   結果 warnings に常に降格警告を含める（ADR-014）。
+ * - P4 で追加されたノード: master カーブ / HSL 8系統 / ジオメトリ（90°回転・反転・
+ *   プリセット・クロップ）。R/G/B チャンネルカーブ・自由角度・光学補正は未適用。
  * - 巨大Bitmapの多重保持を避ける: 結果は RenderBitmapStore（文書ごと直近3世代）に置き、
  *   入力ソースは即 recycle、並列生成は1に制限（§4.3）。
  * - 処理は常にワーカースレッド（Dispatchers.Default / IO）。UI スレッドで実行しない。
@@ -157,21 +159,34 @@ class SimpleBitmapPhotoRenderer(
     }
 
     /**
-     * 調整適用（8bit sRGB 暫定）。書き出し（ExportBitmapRenderer.applyTone）と同一ノード実装
-     * （RecipeDevelopApplier.applyToPixels・RecipeToneCurve 正本）に委譲する。
-     * 未実装ノードの有効値が入り込んでも無通知適用はしない（ADR-014）。
-     * カーブ/HSL/masks/geometry はこの段階では読まない（VM 側 warnings で説明）。
+     * ジオメトリ + develop 適用（8bit sRGB 暫定）。
+     * 書き出し（ExportBitmapRenderer）と同一ノード実装へ委譲する:
+     *   RecipeGeometry.apply（回転→反転→クロップ、純Kotlin ピクセル再索引）
+     *   → RecipeDevelopApplier.applyToPixels（RecipeToneCurve/RecipeCurve/RecipeHsl 正本）。
+     * 未実装ノードの有効値が入り込んでも無通知適用はしない（ADR-014、warnings 由来）。
+     * ディテール/光学補正/局所マスクはこの段階では読まない。
      */
     private fun applyDevelop(source: Bitmap, recipe: EditRecipe): Bitmap {
         val width = source.width
         val height = source.height
-        val pixels = IntArray(width * height)
+        var pixels = IntArray(width * height)
         source.getPixels(pixels, 0, width, 0, 0, width, height)
 
+        val g = recipe.geometry
+        val plane = RecipeGeometry.applyIfNeeded(
+            RecipeGeometry.PixPlane(pixels, width, height),
+            g.angleDeg,
+            g.mirrorX,
+            g.mirrorY,
+            g.cropNorm,
+        )
+        pixels = plane.pixels
         RecipeDevelopApplier.applyToPixels(pixels, recipe.develop)
 
-        val out = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        out.setPixels(pixels, 0, width, 0, 0, width, height)
+        val outW = plane.width
+        val outH = plane.height
+        val out = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888)
+        out.setPixels(pixels, 0, outW, 0, 0, outW, outH)
         return out
     }
 
@@ -180,8 +195,8 @@ class SimpleBitmapPhotoRenderer(
         val RENDER_WARNINGS = arrayOf(
             "8bit-sRGB CPU fallback pipeline (ADR-005 float/tile pipeline not implemented)",
             "input ICC / EXIF orientation not yet applied",
-            "unimplemented nodes ignored: curve, HSL, detail, vignette, masks, geometry",
-            "tone node formulas are design-stage; visual quality unverified (no golden tests)",
+            "unimplemented nodes ignored: detail, vignette, local masks (curve/HSL/geometry are applied)",
+            "tone/curve/HSL node formulas are design-stage; visual quality unverified (no golden tests)",
         )
     }
 }

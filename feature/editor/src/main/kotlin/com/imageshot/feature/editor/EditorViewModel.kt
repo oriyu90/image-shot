@@ -9,6 +9,8 @@ import com.imageshot.core.database.EditStore
 import com.imageshot.core.database.toModel
 import com.imageshot.core.model.AdjustmentId
 import com.imageshot.core.model.Asset
+import com.imageshot.core.model.EditEventKind
+import com.imageshot.core.model.EditNodeSpecs
 import com.imageshot.core.model.EditRecipe
 import com.imageshot.core.model.ImageOpResult
 import com.imageshot.core.model.RecipeParameterEdit
@@ -61,6 +63,10 @@ class EditorViewModel(
         val asset: Asset?,
         /** ドラッグ中は当該スライダーのみ一時値が上書きされる（DB には影響しない）。 */
         val sliders: List<SliderBind> = AdjustmentId.entries.map { SliderBind(it, it.default) },
+        /** master カーブ制御点（正規化済み）。ドラッグ中は一時値が上書きされる。 */
+        val curvePoints: List<List<Double>> = EditNodeSpecs.CURVE_NEUTRAL_RGB,
+        /** ジオメトリ（回転/反転/クロップ）の確定済み絶対状態。 */
+        val geometry: EditRecipe.GeometryParams = EditRecipe.GeometryParams(),
         val history: List<HistoryRow> = emptyList(),
         val canUndo: Boolean = false,
         val canRedo: Boolean = false,
@@ -88,6 +94,8 @@ class EditorViewModel(
     private val assetFlow = MutableStateFlow<Asset?>(null)
     private val recipe = MutableStateFlow<EditRecipe?>(null)
     private val transient = MutableStateFlow<Map<AdjustmentId, Double>>(emptyMap())
+    /** master カーブのドラッグ中一時値（正規化済み）。確定でクリア。 */
+    private val transientCurve = MutableStateFlow<List<List<Double>>?>(null)
     private val history = MutableStateFlow<List<HistoryRow>>(emptyList())
     private val canUndo = MutableStateFlow(false)
     private val canRedo = MutableStateFlow(false)
@@ -136,18 +144,20 @@ class EditorViewModel(
 
     fun state(): StateFlow<EditorState> = combine(
         assetFlow.asStateFlow(),
-        sliderBinds(),
+        panelProjection(),
         history.asStateFlow(),
         combine(render.asStateFlow(), before.asStateFlow()) { r, b -> r.warnings to b.image },
         combine(canUndo, canRedo, dragging, showBefore, combine(saveState, saveFailure) { s, f -> s to f }) {
                 undo, redo, isDragging, beforeOn, saves ->
             SessionUi(undo, redo, isDragging, beforeOn, saves.first, saves.second)
         },
-    ) { asset, binds, rows, (warnings, _), session ->
+    ) { asset, projection, rows, (warnings, _), session ->
         EditorState(
             assetId = assetId,
             asset = asset,
-            sliders = binds,
+            sliders = projection.sliders,
+            curvePoints = projection.curvePoints,
+            geometry = projection.geometry,
             history = rows,
             canUndo = session.canUndo,
             canRedo = session.canRedo,
@@ -162,7 +172,7 @@ class EditorViewModel(
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000),
-        // 初期値はスライダ基定値（DB からの復元は init  succeeded 後に反映される）。
+        // 初期値はスライダ基定値（DB からの復元は init succeeded 後に反映される）。
         initialValue = EditorState(assetId = assetId, asset = null),
     )
 
@@ -222,6 +232,102 @@ class EditorViewModel(
         }
     }
 
+    /**
+     * master カーブ: ドラッグ中の一時更新（DRAFT 描画、DB には触れない）。
+     * 正規化できない入力は無視する（UI 側に立たせる・既定値へ落とさない）。
+     */
+    fun onCurvePreview(points: List<List<Double>>) {
+        dragging.value = true
+        val normalized = EditNodeSpecs.normalizeCurve(points) ?: return
+        transientCurve.value = normalized
+        val now = System.currentTimeMillis()
+        if (now - lastDraftAt >= DRAFT_INTERVAL_MS) {
+            lastDraftAt = now
+            scheduleRender(RenderTarget.PREVIEW, RenderRequest.Quality.DRAFT, draftRecipe(normalized))
+        }
+    }
+
+    /**
+     * master カーブ: 指を離した時点で絶対状態イベントを確定（EditStore.commitCurve）。
+     * 確定済み点列と同一（実質無変化）の場合はイベントを作らない。
+     */
+    fun onCurveCommit(points: List<List<Double>>) {
+        dragging.value = false
+        viewModelScope.launch {
+            val normalized = EditNodeSpecs.normalizeCurve(points)
+            if (normalized == null) {
+                // ドラッグの残滓が不正な場合は一時値を捨てて確定済み状態へ戻す。
+                transientCurve.value = null
+                scheduleRender(RenderTarget.PREVIEW, RenderRequest.Quality.PREVIEW, recipe.value ?: return@launch)
+                return@launch
+            }
+            val base = recipe.value
+            val current = base?.develop?.curve?.rgb
+            if (current != null && current == normalized) {
+                transientCurve.value = null
+                scheduleRender(RenderTarget.PREVIEW, RenderRequest.Quality.PREVIEW, base)
+                return@launch
+            }
+            commitToStore("curve") { docId ->
+                editStore.commitCurve(docId, committedRevision, normalized)
+            }
+        }
+    }
+
+    /** master カーブを中立（y=x）へ戻す。確定済みがすでに中立ならイベントを作らない。 */
+    fun onCurveReset() {
+        dragging.value = false
+        transientCurve.value = null
+        if (EditNodeSpecs.isNeutralCurve(recipe.value?.develop?.curve?.rgb ?: EditNodeSpecs.CURVE_NEUTRAL_RGB)) {
+            scheduleRender(RenderTarget.PREVIEW, RenderRequest.Quality.PREVIEW, recipe.value ?: return)
+            return
+        }
+        commitToStore("curve") { docId ->
+            editStore.commitCurve(docId, committedRevision, EditNodeSpecs.CURVE_NEUTRAL_RGB)
+        }
+    }
+
+    /** ジオメトリ: 90°単位の回転（+1 = 時計回り, -1 = 反時計回り）。 */
+    fun onGeometryRotate(deltaQuarters: Int) {
+        // deltaQuarters は ±1 を想定。 quarter を mod 4 で畳み込む（正規化済み角度）。
+        val current = recipe.value?.geometry ?: EditRecipe.GeometryParams()
+        val quarters = (current.angleDeg / 90.0).toInt() // 0..3（正規化済み）
+        val next = ((quarters + deltaQuarters) % 4 + 4) % 4
+        val nextGeometry = current.copy(angleDeg = next * 90.0)
+        commitGeometryNormalized(nextGeometry)
+    }
+
+    /** ジオメトリ: 反転トグル（mirrorX = 水平, mirrorY = 垂直）。 */
+    fun onGeometryFlip(mirrorX: Boolean) {
+        val current = recipe.value?.geometry ?: EditRecipe.GeometryParams()
+        val nextGeometry = if (mirrorX) current.copy(mirrorX = !current.mirrorX) else current.copy(mirrorY = !current.mirrorY)
+        commitGeometryNormalized(nextGeometry)
+    }
+
+    /** ジオメトリ: アスペクト比プリセットの中央寄せ最大矩形クロップ。null は原寸（全面）。 */
+    fun onGeometryCrop(aspect: Double?) {
+        val asset = assetFlow.value ?: return
+        val current = recipe.value?.geometry ?: EditRecipe.GeometryParams()
+        val quarters = (current.angleDeg / 90.0).toInt() % 2 == 1 // 90/270 は幅高さ入れ替え
+        val canvasW = if (quarters) asset.height.toDouble() else asset.width.toDouble()
+        val canvasH = if (quarters) asset.width.toDouble() else asset.height.toDouble()
+        val cropNorm = if (aspect == null) {
+            EditRecipe.GeometryParams().cropNorm
+        } else {
+            // 縦長キャンバスではプリセット比を 90°回転した形で最近似させる。
+            val canvasAspect = canvasW / canvasH
+            val target = if (canvasAspect >= 1.0) aspect else 1.0 / aspect
+            centeredMaxRect(canvasW, canvasH, target)
+        }
+        commitGeometryNormalized(current.copy(cropNorm = cropNorm))
+    }
+
+    /** ジオメトリ: クロップ解除（回転・反転は保持）。 */
+    fun onGeometryResetCrop() {
+        val current = recipe.value?.geometry ?: EditRecipe.GeometryParams()
+        commitGeometryNormalized(current.copy(cropNorm = EditRecipe.GeometryParams().cropNorm))
+    }
+
     fun undo() {
         if (dragging.value) return
         actOnStore { editStore.undo(it) }
@@ -248,11 +354,94 @@ class EditorViewModel(
         val saveFailure: String?,
     )
 
-    private fun sliderBinds() = combine(recipe.asStateFlow(), transient.asStateFlow()) { base, overrides ->
+    /** 下部パネルへの一次投影（スライダー値・カーブ・ジオメトリ。combine 段数の集約のため導入）。 */
+    private data class PanelProjection(
+        val sliders: List<SliderBind>,
+        val curvePoints: List<List<Double>>,
+        val geometry: EditRecipe.GeometryParams,
+    )
+
+    private fun panelProjection() = combine(
+        recipe.asStateFlow(),
+        transient.asStateFlow(),
+        transientCurve.asStateFlow(),
+    ) { base, overrides, curveOverride ->
         val effective = base ?: defaultRecipe(null)
-        AdjustmentId.entries.map { id ->
-            SliderBind(id, overrides[id] ?: id.sliderValueOf(effective))
+        PanelProjection(
+            sliders = AdjustmentId.entries.map { id ->
+                SliderBind(id, overrides[id] ?: id.sliderValueOf(effective))
+            },
+            curvePoints = curveOverride ?: effective.develop.curve.rgb.ifEmpty { EditNodeSpecs.CURVE_NEUTRAL_RGB },
+            geometry = effective.geometry,
+        )
+    }
+
+    /**
+     * 確定共通経路（スライダー / カーブ / ジオメトリで同一契約）。
+     * 失効（stale baseRevision）等: 無通知続行せず失敗を明示し、正本へ再同期（NFR-06）。
+     */
+    private fun commitToStore(source: String, action: suspend (String) -> ImageOpResult<EditStore.EditStoreState>) {
+        viewModelScope.launch {
+            saveState.value = SaveState.SAVING
+            saveFailure.value = null
+            val docId = documentId
+            if (docId == null || recipe.value == null) {
+                saveState.value = SaveState.FAILED
+                saveFailure.value = "編集文書が未ロード"
+                return@launch
+            }
+            when (val result = action(docId)) {
+                is ImageOpResult.Success -> {
+                    applyStoreState(result.value)
+                    saveState.value = SaveState.SAVED
+                    transient.value = emptyMap()
+                    if (source == "curve") transientCurve.value = null
+                    scheduleRender(RenderTarget.PREVIEW, RenderRequest.Quality.PREVIEW, result.value.recipe)
+                }
+                is ImageOpResult.Degraded -> {
+                    applyStoreState(result.value)
+                    saveState.value = SaveState.SAVED
+                    saveFailure.value = "degraded: ${result.code}"
+                    transient.value = emptyMap()
+                    if (source == "curve") transientCurve.value = null
+                }
+                is ImageOpResult.Failure -> {
+                    saveState.value = SaveState.FAILED
+                    saveFailure.value = "${result.code}: ${result.detail.orEmpty()}"
+                    resyncAfterFailure()
+                }
+            }
         }
+    }
+
+    /** ジオメトリ確定（入力は正規化済み想定。DB 側で再正規化・不正は FAIL）。 */
+    private fun commitGeometryNormalized(geometry: EditRecipe.GeometryParams) {
+        commitToStore("geometry") { docId ->
+            editStore.commitGeometry(docId, committedRevision, geometry)
+        }
+    }
+
+    /**
+     * キャンバス [canvasW, canvasH] に内接する・アスペクト比 [aspect] (=w/h) の
+     * 中央寄せ最大矩形（正規化座標）。M1 はエッジドラッグの自由クロップを提供せず、
+     * プリセット比の中央寄せ矩形のみ（未実装箇所は UI で明示）。
+     */
+    private fun centeredMaxRect(canvasW: Double, canvasH: Double, aspect: Double): List<Double> {
+        val canvasAspect = canvasW / canvasH
+        val rectW: Double
+        val rectH: Double
+        if (aspect >= canvasAspect) {
+            rectW = canvasW
+            rectH = canvasW / aspect
+        } else {
+            rectH = canvasH
+            rectW = canvasH * aspect
+        }
+        val l = (canvasW - rectW) / 2.0 / canvasW
+        val t = (canvasH - rectH) / 2.0 / canvasH
+        val r = (canvasW + rectW) / 2.0 / canvasW
+        val b = (canvasH + rectH) / 2.0 / canvasH
+        return listOf(l, t, r, b)
     }
 
     private fun actOnStore(
@@ -270,6 +459,7 @@ class EditorViewModel(
                             applyStoreState(outcome.state)
                             saveState.value = SaveState.SAVED
                             transient.value = emptyMap()
+                            transientCurve.value = null
                             scheduleRender(
                                 RenderTarget.PREVIEW,
                                 RenderRequest.Quality.PREVIEW,
@@ -319,11 +509,15 @@ class EditorViewModel(
         }
     }
 
-    /** ドラッグ中の一時値を仮レシピへ合成（DB には触れない）。 */
-    private fun draftRecipe(): EditRecipe {
+    /** 一時値を仮レシピへ合成（DB には触れない）。カーブ一時値も同様に差し替える。 */
+    private fun draftRecipe(curveOverride: List<List<Double>>? = transientCurve.value): EditRecipe {
         val base = recipe.value ?: defaultRecipe(null)
         var out = base
         transient.value.forEach { (id, v) -> out = id.apply(out, v) }
+        val curve = curveOverride?.let { EditNodeSpecs.normalizeCurve(it) }
+        if (curve != null) {
+            out = out.copy(develop = out.develop.copy(curve = out.develop.curve.copy(rgb = curve)))
+        }
         return out
     }
 
@@ -332,6 +526,7 @@ class EditorViewModel(
         source = EditRecipe.RecipeSource(assetId = assetId, fingerprint = "unscanned"),
     )
 
+    /** 履歴行のラベル。スライダーは AdjustmentId、ノード事件（curve/geometry）は絶対状態から要約。 */
     private fun historyRow(item: EditStore.EditStoreHistoryItem): HistoryRow {
         val id = item.path?.let { AdjustmentId.byPath(it) }
         val opLabel = when (item.op) {
@@ -340,16 +535,35 @@ class EditorViewModel(
             RecipeParameterEdit.OP_REDO -> "やり直し"
             else -> item.eventType
         }
-        val valueText = when {
-            id == null -> item.path ?: ""
+        val label: String = when {
+            item.eventType == EditEventKind.CURVE.id -> {
+                // master カーブの絶対状態を要約表示（payload JSON を UI に露出しない）。
+                "$opLabel: マスターカーブ ${item.curvePoints?.size ?: 0}点"
+            }
+            item.eventType == EditEventKind.GEOMETRY.id -> {
+                val g = item.geometry
+                if (g == null) "$opLabel: ジオメトリ"
+                else {
+                    val flips = listOfNotNull(
+                        if (g.mirrorX) "水平反転" else null,
+                        if (g.mirrorY) "垂直反転" else null,
+                    ).joinToString("・")
+                    val full = g.cropNorm == EditRecipe.GeometryParams().cropNorm
+                    val crop = if (full) null else "クロップ"
+                    val detail = listOf("回転${g.angleDeg.toInt()}°", flips, crop).filterNotNull().joinToString("・")
+                    "$opLabel: ジオメトリ（$detail）"
+                }
+            }
+            id == null -> "${item.path ?: item.eventType} $opLabel"
             else -> {
                 val v = item.value
-                if (v != null) id.formatValue(v) + id.unit.display else ""
+                val valueText = if (v != null) id.formatValue(v) + id.unit.display else ""
+                "$opLabel: ${id.label} $valueText"
             }
         }
         return HistoryRow(
             revisionNo = item.revisionNo,
-            label = "$opLabel: ${id?.label ?: item.path ?: item.eventType} $valueText".trim(),
+            label = label.trim(),
             committedAt = item.committedAt,
         )
     }

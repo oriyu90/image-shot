@@ -8,8 +8,8 @@ import androidx.room.PrimaryKey
 /**
  * Room 永続エンティティ（02_実装定義書.md §3.1 に準拠）。
  * recipe/events の payload は kotlinx.serialization JSON（schemaVersion付き）で保存する。
- * TODO(ADR確認): §3.2 は内部保存に安定したバイナリ（CBOR/Proto相当）を許容している。
- *  この雛形では開発初期の可視性を優先して JSON とし、AWD移行は ADR の確認後に別PRで行う。
+ * バイナリ（CBOR/Proto相当）への置き替えは ADR-022 で確定済み
+ * （DORMANT: 実測条件が満たされた場合のみ再検討する）。
  */
 @Entity(
     tableName = "assets",

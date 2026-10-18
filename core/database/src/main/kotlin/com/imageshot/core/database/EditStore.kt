@@ -2,6 +2,10 @@ package com.imageshot.core.database
 
 import androidx.room.withTransaction
 import com.imageshot.core.model.AdjustmentId
+import com.imageshot.core.model.EditEventKind
+import com.imageshot.core.model.EditEventStatus
+import com.imageshot.core.model.EditNodeSpecs
+import com.imageshot.core.model.LEGACY_EVENT_TYPE_PARAM
 import com.imageshot.core.model.EditRecipe
 import com.imageshot.core.model.ErrorCode
 import com.imageshot.core.model.ImageOpResult
@@ -11,6 +15,8 @@ import java.security.MessageDigest
 import java.util.UUID
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.put
@@ -30,6 +36,9 @@ import kotlinx.serialization.json.put
  *   → Undo 可能条件 = 末尾イベント op ∈ {apply, redo}、Redo 可能条件 = 末尾 op = undo。
  * - 故障時: 操作途中の kill は最後の確定イベントまで戻ってよい。確定後 kill でイベント欠落は不可。
  *   チェックサム不一致イベントは再生スキップし（§3.3「正しいチェックサムのイベントだけ再生」）。
+ * - eventType は正本列挙（ADR-022, [EditEventKind]）の安定IDで書込む。ドキュメント内に
+ *   未知種別/未対応 schemaVersion の行があっても、値を保持（PRESERVED_ONLY）し・適用せず・
+ *   行を書換しない。集計は [EditDecodeSummary] で明示する（§7.1 哲学）。
  *
  * 上位層（feature/editor）との契約:
  * - baseRevision 非一致の確定要求は「失効」として拒否し、上位は reload して再同期する
@@ -50,7 +59,30 @@ class EditStore(
         val value: Double?,
         val op: String?,
         val committedAt: Long,
+        /** curve イベントの master 制御点（正規化済み）。スライダー種は null。 */
+        val curvePoints: List<List<Double>>? = null,
+        /** geometry イベントの絶対状態（正規化済み）。スライダー種は null。 */
+        val geometry: EditRecipe.GeometryParams? = null,
     )
+
+    /** 編集イベントの payload 解放（再生）に関する明示的集計（§7.1 変換ステータスの哲学）。 */
+    data class EditDecodeSummary(
+        /** 総イベント件数（チェックサム基点込みの全 revision）。 */
+        val totalRevisions: Int,
+        /** 現在のレシピへ適用した既知イベント件数。 */
+        val applied: Int,
+        /**
+         * PRESERVED_ONLY（未知 eventType / 未知パス）。値を保持し履歴として表示するが、
+         * 現在構築では適用せず・既定値に落とさない・削除しない（§7.1, ADR-022）。
+         */
+        val preservedOnly: Int,
+        /** 未対応 payloadSchemaVersion（将来バージョン）。適用も既定値化もしない。 */
+        val unsupportedVersion: Int,
+        /** チェックサム不一致 / JSON 破損。再生から除外する（§3.3）。 */
+        val invalid: Int,
+    ) {
+        val isFullyApplied: Boolean get() = preservedOnly == 0 && unsupportedVersion == 0 && invalid == 0
+    }
 
     data class EditStoreState(
         val documentId: String,
@@ -63,6 +95,8 @@ class EditStore(
         val canRedo: Boolean,
         /** 有効スナップショットの改訂番号（0 = スナップショット未作成）。 */
         val snapshotRevisionNo: Long,
+        /** 再生の明示集計（未知/未対応/破損イベントの扱いを無通知にしない, ADR-014）。 */
+        val decodeSummary: EditDecodeSummary,
     )
 
     sealed interface UndoOutcome {
@@ -138,6 +172,74 @@ class EditStore(
         return appendEvent(doc, id, validated.value, op)
     }
 
+    /**
+     * master カーブ（全体）を絶対状態として確定する。
+     * payload 形状 v1: `{"curve":{"rgb":[[x,y]...]},"op":...}`（ADR-022 の第2段・P4）。
+     * 正規化できない点列は FAIL（既定値へ落とさない）。
+     */
+    suspend fun commitCurve(
+        documentId: String,
+        baseRevision: Long,
+        points: List<List<Double>>,
+        op: String = RecipeParameterEdit.OP_APPLY,
+    ): ImageOpResult<EditStoreState> {
+        val doc = backend.getDocument(documentId)
+            ?: return ImageOpResult.Failure(ErrorCode.MALFORMED_METADATA, "edit document not found: $documentId")
+        if (doc.currentRevision != baseRevision) {
+            return ImageOpResult.Failure(
+                ErrorCode.MALFORMED_METADATA,
+                "stale baseRevision=$baseRevision current=${doc.currentRevision}",
+            )
+        }
+        val normalized = EditNodeSpecs.normalizeCurve(points)
+            ?: return ImageOpResult.Failure(
+                ErrorCode.MALFORMED_METADATA,
+                "invalid curve points (finite/2..16 points/sorted required)",
+            )
+        val payload = buildJsonObject {
+            put("op", op)
+            put("curve", buildJsonObject {
+                put("rgb", curvePointsJson(normalized))
+            })
+        }
+        return appendNodeEvent(doc, EditEventKind.CURVE.id, payload)
+    }
+
+    /**
+     * ジオメトリ（回転/反転/クロップ）を絶対状態として確定する。
+     * payload 形状 v1: `{"geometry":{...},"op":...}`。正規化できない入力は FAIL。
+     */
+    suspend fun commitGeometry(
+        documentId: String,
+        baseRevision: Long,
+        geometry: EditRecipe.GeometryParams,
+        op: String = RecipeParameterEdit.OP_APPLY,
+    ): ImageOpResult<EditStoreState> {
+        val doc = backend.getDocument(documentId)
+            ?: return ImageOpResult.Failure(ErrorCode.MALFORMED_METADATA, "edit document not found: $documentId")
+        if (doc.currentRevision != baseRevision) {
+            return ImageOpResult.Failure(
+                ErrorCode.MALFORMED_METADATA,
+                "stale baseRevision=$baseRevision current=${doc.currentRevision}",
+            )
+        }
+        val normalized = EditNodeSpecs.normalizeGeometry(geometry)
+            ?: return ImageOpResult.Failure(
+                ErrorCode.MALFORMED_METADATA,
+                "invalid geometry params (angle must be 0/90/180/270; crop span > 0)",
+            )
+        val payload = buildJsonObject {
+            put("op", op)
+            put("geometry", buildJsonObject {
+                put("angleDeg", normalized.angleDeg)
+                put("mirrorX", normalized.mirrorX)
+                put("mirrorY", normalized.mirrorY)
+                put("crop", buildJsonArray { normalized.cropNorm.forEach { add(JsonPrimitive(it)) } })
+            })
+        }
+        return appendNodeEvent(doc, EditEventKind.GEOMETRY.id, payload)
+    }
+
     /** Undo: 末尾イベントの影響を取り消す新規イベント（op=undo）を追記。削除・書換はしない。 */
     suspend fun undo(documentId: String): ImageOpResult<UndoOutcome> {
         val doc = backend.getDocument(documentId)
@@ -146,6 +248,26 @@ class EditStore(
         val last = state.history.lastOrNull() ?: return ImageOpResult.Success(UndoOutcome.Noop)
         val lastOp = last.op
         if (lastOp == RecipeParameterEdit.OP_UNDO) return ImageOpResult.Success(UndoOutcome.Noop)
+        // ノード（curve/geometry）イベントは絶対状態スナップショットで undo する（本Event前の状態へ）。
+        if (last.eventType == EditEventKind.CURVE.id || last.eventType == EditEventKind.GEOMETRY.id) {
+            val previous = previousNodeState(state.history, last.eventType, last.revisionNo, effectiveOnly = false)
+            val committed = if (last.eventType == EditEventKind.CURVE.id) {
+                commitCurve(
+                    documentId,
+                    doc.currentRevision,
+                    previous?.curvePoints ?: EditNodeSpecs.CURVE_NEUTRAL_RGB,
+                    RecipeParameterEdit.OP_UNDO,
+                )
+            } else {
+                commitGeometry(
+                    documentId,
+                    doc.currentRevision,
+                    previous?.geometry ?: EditRecipe.GeometryParams(),
+                    RecipeParameterEdit.OP_UNDO,
+                )
+            }
+            return toUndoOutcome(committed)
+        }
         val id = last.path?.let { AdjustmentId.byPath(it) } ?: return ImageOpResult.Success(UndoOutcome.Noop)
         val previous = previousSliderValue(state.history, id)
         val committed = appendEvent(doc, id, previous, RecipeParameterEdit.OP_UNDO)
@@ -163,6 +285,26 @@ class EditStore(
         val state = loadInternal(documentId) ?: return successStateFailure(documentId)
         val last = state.history.lastOrNull() ?: return ImageOpResult.Success(UndoOutcome.Noop)
         if (last.op != RecipeParameterEdit.OP_UNDO) return ImageOpResult.Success(UndoOutcome.Noop)
+        // ノード（curve/geometry）の redo: 取り消し直前の状態（末尾 undo の直前ノード状態）へ戻す。
+        if (last.eventType == EditEventKind.CURVE.id || last.eventType == EditEventKind.GEOMETRY.id) {
+            val redone = previousNodeState(state.history, last.eventType, last.revisionNo, effectiveOnly = true)
+            val committed = if (last.eventType == EditEventKind.CURVE.id) {
+                commitCurve(
+                    documentId,
+                    doc.currentRevision,
+                    redone?.curvePoints ?: EditNodeSpecs.CURVE_NEUTRAL_RGB,
+                    RecipeParameterEdit.OP_REDO,
+                )
+            } else {
+                commitGeometry(
+                    documentId,
+                    doc.currentRevision,
+                    redone?.geometry ?: EditRecipe.GeometryParams(),
+                    RecipeParameterEdit.OP_REDO,
+                )
+            }
+            return toUndoOutcome(committed)
+        }
         val id = last.path?.let { AdjustmentId.byPath(it) } ?: return ImageOpResult.Success(UndoOutcome.Noop)
         val undone = last.revisionNo.let { rev ->
             state.history.lastOrNull {
@@ -193,6 +335,37 @@ class EditStore(
         return id.default
     }
 
+    /**
+     * ノード（curve/geometry）履歴から 1つ前の絶対状態を復元する。
+     * - [effectiveOnly]=false（undo 用）: 末尾を除く当該種の直近イベント（op 不問）の payload 状態。
+     *   （すべてのノードイベントはその時点の結果状態を持つため、任意 op の payload が最新状態。）
+     * - [effectiveOnly]=true（redo 用）: op=undo でない直近イベント（取り消し直前の状態）。
+     * 見つからなければ null（呼出し側が既定 neutral 状態へ落とす = スライダーの id.default と同一規約）。
+     */
+    private fun previousNodeState(
+        history: List<EditStoreHistoryItem>,
+        eventType: String,
+        beforeRevisionNo: Long,
+        effectiveOnly: Boolean,
+    ): EditStoreHistoryItem? {
+        for (i in history.lastIndex downTo 0) {
+            val item = history[i]
+            if (item.revisionNo >= beforeRevisionNo) continue
+            if (item.eventType != eventType) continue
+            if (effectiveOnly && item.op == RecipeParameterEdit.OP_UNDO) continue
+            return item
+        }
+        return null
+    }
+
+    /** Undo/Redo 結果の型変換（共通）。 */
+    private fun toUndoOutcome(result: ImageOpResult<EditStoreState>): ImageOpResult<UndoOutcome> =
+        when (result) {
+            is ImageOpResult.Success -> ImageOpResult.Success(UndoOutcome.Applied(result.value))
+            is ImageOpResult.Degraded -> ImageOpResult.Success(UndoOutcome.Applied(result.value))
+            is ImageOpResult.Failure -> result
+        }
+
     private suspend fun appendEvent(
         doc: EditDocumentEntity,
         id: AdjustmentId,
@@ -200,18 +373,32 @@ class EditStore(
         op: String,
     ): ImageOpResult<EditStoreState> {
         val revisionNo = doc.currentRevision + 1
+        // 正本列挙（ADR-022）: 新規イベントの eventType は payload の path から導出した種別ID。
         val payload: JsonObject = buildJsonObject {
             put("path", id.recipePath)
             put("value", value)
             put("op", op)
         }
+        return appendNodeEvent(doc, id.kind.id, payload)
+    }
+
+    /**
+     * ノードイベント追記の共通部（スライダー / curve / geometry の3経路で同一トランザクション契約）。
+     * 「イベント追記 + 文書カーソル更新 +（閾値到達時）スナップショット」を1トランザクションで行う。
+     */
+    private suspend fun appendNodeEvent(
+        doc: EditDocumentEntity,
+        eventType: String,
+        payload: JsonObject,
+    ): ImageOpResult<EditStoreState> {
+        val revisionNo = doc.currentRevision + 1
         val payloadJson = EditRecordCodec.encodeEventPayload(payload)
         val committedAt = now()
-        val checksum = EditChecksums.revisionChecksum(doc.id, revisionNo, EVENT_TYPE_PARAM, payloadJson)
+        val checksum = EditChecksums.revisionChecksum(doc.id, revisionNo, eventType, payloadJson)
         val revision = EditRevisionEntity(
             documentId = doc.id,
             revisionNo = revisionNo,
-            eventType = EVENT_TYPE_PARAM,
+            eventType = eventType,
             payloadJson = payloadJson,
             payloadSchemaVersion = EVENT_PAYLOAD_SCHEMA_VERSION,
             committedAt = committedAt,
@@ -278,16 +465,84 @@ class EditStore(
 
         var recipe = base
         val history = mutableListOf<EditStoreHistoryItem>()
-        for (rev in backend.allRevisions(documentId)) {
+        var applied = 0
+        var preservedOnly = 0
+        var unsupportedVersion = 0
+        var invalid = 0
+        val revisions = backend.allRevisions(documentId)
+        for (rev in revisions) {
             val payload = runCatching { EditRecordCodec.decodeEventPayload(rev.payloadJson) }.getOrNull()
-            if (payload == null) continue
+            if (payload == null) {
+                invalid++
+                continue
+            }
             if (rev.checksum != EditChecksums.revisionChecksum(rev.documentId, rev.revisionNo, rev.eventType, rev.payloadJson)) {
                 // §3.3: チェックサムが正しいイベントだけ再生する。
+                invalid++
                 continue
             }
             history += parseHistoryItem(rev, payload)
-            if (rev.revisionNo > baseRevision) {
-                recipe = applyPayload(recipe, payload) ?: recipe
+            if (rev.payloadSchemaVersion in 1..EVENT_PAYLOAD_SCHEMA_VERSION) {
+                when (rev.eventType) {
+                    // ---- P4 ノード種: 絶対状態 payload（スライダー解決経路とは別再生）----
+                    EditEventKind.CURVE.id -> {
+                        val points = parseCurvePayload(payload)
+                        when {
+                            points == null -> {
+                                // 形状不一致（旧世代/外部由来）の curve 行: 適用せず保持のみ
+                                // （§7.1 PRESERVED_ONLY 相当）。旧構築の解釈規則と同一挙動。
+                                preservedOnly++
+                            }
+                            rev.revisionNo > baseRevision -> {
+                                recipe = recipe.copy(
+                                    develop = recipe.develop.copy(
+                                        curve = recipe.develop.curve.copy(rgb = points),
+                                    ),
+                                )
+                                applied++
+                            }
+                            // スナップショット範囲内: 効果はスナップショットに取り込み済み。
+                            else -> Unit
+                        }
+                    }
+                    EditEventKind.GEOMETRY.id -> {
+                        val geometry = parseGeometryPayload(payload)
+                        when {
+                            geometry == null -> preservedOnly++
+                            rev.revisionNo > baseRevision -> {
+                                recipe = recipe.copy(geometry = geometry)
+                                applied++
+                            }
+                            else -> Unit
+                        }
+                    }
+                    // ---- スライダー種（tone/wb/color/hsl）----
+                    else -> {
+                        val id = resolveAdjustment(rev.eventType, payload)
+                        when {
+                            id != null && rev.revisionNo > baseRevision -> {
+                                val value = (payload["value"] as? JsonPrimitive)?.doubleOrNull
+                                if (value != null && value.isFinite()) {
+                                    recipe = id.apply(recipe, value)
+                                    applied++
+                                } else {
+                                    // 有限値でない payload は既定値へ落とさず失敗側に数える（§7.2 INVALID）。
+                                    invalid++
+                                }
+                            }
+                            id == null -> {
+                                // 種別既知でも payload が不正、または未知種別/未知パス:
+                                // 値は保持するが適用しない（§7.1 PRESERVED_ONLY 相当, ADR-022）。
+                                preservedOnly++
+                            }
+                            // id != null でスナップショット範囲内の既知イベントは、効果がスナップショットに
+                            // 取り込まれているため適用も保持も数えない（history 表示のみ）。
+                        }
+                    }
+                }
+            } else {
+                // 未対応の将来バージョン: 適用せず・既定値に落とさず・行も書換しない（ADR-022）。
+                unsupportedVersion++
             }
         }
 
@@ -304,20 +559,48 @@ class EditStore(
             canUndo = canUndoState,
             canRedo = canRedoState,
             snapshotRevisionNo = baseRevision,
+            decodeSummary = EditDecodeSummary(
+                totalRevisions = revisions.size,
+                applied = applied,
+                preservedOnly = preservedOnly,
+                unsupportedVersion = unsupportedVersion,
+                invalid = invalid,
+            ),
         )
     }
 
-    private fun applyPayload(recipe: EditRecipe, payload: JsonObject): EditRecipe? {
+    /**
+     * eventType + payload からスライダー種別を一意に解決する（ADR-022 正本列挙）。
+     * - 正本ID（tone/wb/color）: payload の path から AdjustmentId を解決し、ドメ一致を検査。
+     * - 旧雛形の "param"（[LEGACY_EVENT_TYPE_PARAM]）: 同様にパスのみで解決（後方互換エイリアス）。
+     * - それ以外（未知種別・RESERVED 未確定種・パス不整合）は null。
+     *   呼び出し側は PRESERVED_ONLY として値を保持し、適用・既定値化・削除をしない。
+     */
+    private fun resolveAdjustment(eventType: String, payload: JsonObject): AdjustmentId? {
+        val kind = EditEventKind.byId(eventType)
+        if (kind != null && kind.status != EditEventStatus.IMPLEMENTED_M1) {
+            // RESERVED 種は payload 形状未確定であり解釈しない（誤適用を作らない）。
+            return null
+        }
+        if (kind == null && eventType != LEGACY_EVENT_TYPE_PARAM) {
+            // 未知種別は素通りさせない。path が既知でも PRESERVED_ONLY（ADR-022 判定規則）。
+            return null
+        }
         val path = (payload["path"] as? JsonPrimitive)?.content ?: return null
-        val value = (payload["value"] as? JsonPrimitive)?.doubleOrNull ?: return null
-        val id = AdjustmentId.byPath(path) ?: return null // 未知パスはスキップ（破壊保存しない）
-        return id.apply(recipe, value)
+        val id = AdjustmentId.byPath(path) ?: return null
+        // 種別既知の場合は payload の path とドメインが一致するか検査（不整合は保持のみ）。
+        return if (kind == null || kind == id.kind) id else null
     }
 
     private fun parseHistoryItem(rev: EditRevisionEntity, payload: JsonObject): EditStoreHistoryItem {
         val path = (payload["path"] as? JsonPrimitive)?.content
         val value = (payload["value"] as? JsonPrimitive)?.doubleOrNull
         val op = (payload["op"] as? JsonPrimitive)?.content
+        val node = when (rev.eventType) {
+            EditEventKind.CURVE.id -> parseCurvePayload(payload)
+            EditEventKind.GEOMETRY.id -> parseGeometryPayload(payload)
+            else -> null
+        }
         return EditStoreHistoryItem(
             revisionNo = rev.revisionNo,
             eventType = rev.eventType,
@@ -325,11 +608,49 @@ class EditStore(
             value = value,
             op = op,
             committedAt = rev.committedAt,
+            curvePoints = if (rev.eventType == EditEventKind.CURVE.id) node as List<List<Double>>? else null,
+            geometry = if (rev.eventType == EditEventKind.GEOMETRY.id) node as EditRecipe.GeometryParams? else null,
         )
     }
 
+    /** curve payload v1 → 正規化済み制御点。形状不一致は null（PRESERVED_ONLY）。 */
+    private fun parseCurvePayload(payload: JsonObject): List<List<Double>>? {
+        val curve = payload["curve"] as? JsonObject ?: return null
+        val rgb = curve["rgb"] as? kotlinx.serialization.json.JsonArray ?: return null
+        val points = rgb.map { element ->
+            val pt = element as? kotlinx.serialization.json.JsonArray ?: return null
+            pt.map { (it as? JsonPrimitive)?.doubleOrNull ?: return null }
+        }
+        return EditNodeSpecs.normalizeCurve(points)
+    }
+
+    /** geometry payload v1 → 正規化済み GeometryParams。形状不一致は null（PRESERVED_ONLY）。 */
+    private fun parseGeometryPayload(payload: JsonObject): EditRecipe.GeometryParams? {
+        val geo = payload["geometry"] as? JsonObject ?: return null
+        val angleDeg = (geo["angleDeg"] as? JsonPrimitive)?.doubleOrNull ?: return null
+        val mirrorX = (geo["mirrorX"] as? JsonPrimitive)?.booleanOrNull ?: return null
+        val mirrorY = (geo["mirrorY"] as? JsonPrimitive)?.booleanOrNull ?: return null
+        val crop = (geo["crop"] as? kotlinx.serialization.json.JsonArray) ?: return null
+        if (crop.size != 4) return null
+        val cropNorm = crop.map { (it as? JsonPrimitive)?.doubleOrNull ?: return null }
+        return EditNodeSpecs.normalizeGeometry(
+            EditRecipe.GeometryParams(
+                cropNorm = cropNorm,
+                angleDeg = angleDeg,
+                mirrorX = mirrorX,
+                mirrorY = mirrorY,
+            ),
+        )
+    }
+
+    /** 正規化済み制御点 → payload の `rgb` 配列（commitCurve 用の唯一の書込み整形）。 */
+    private fun curvePointsJson(points: List<List<Double>>) = buildJsonArray {
+        points.forEach { pt ->
+            add(buildJsonArray { pt.forEach { v -> add(JsonPrimitive(v)) } })
+        }
+    }
+
     companion object {
-        const val EVENT_TYPE_PARAM = "param"
         /** スナップショット作成周期（§3.3「20–50イベント」帯の下限近く）。 */
         const val SNAPSHOT_EVERY = 24
     }

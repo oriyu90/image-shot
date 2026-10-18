@@ -1,5 +1,6 @@
 package com.imageshot.core.render
 
+import com.imageshot.core.model.EditNodeSpecs
 import com.imageshot.core.model.EditRecipe
 
 /**
@@ -7,22 +8,28 @@ import com.imageshot.core.model.EditRecipe
  * 「プレビューと書き出しで同じノード実装とパラメータ」の唯一の適用点）。
  *
  * - プレビュー（SimpleBitmapPhotoRenderer.applyDevelop）と書き出し
- *   （ExportBitmapRenderer.applyTone）の両方がこの純関数へ委譲する。
- *   式の正本は [RecipeToneCurve]（8bit sRGB 暫定パイプライン・設計段階各方面）。
+ *   （ExportBitmapRenderer.applyDevelop）の両方がこの純関数へ委譲する。
+ *   式の正本は [RecipeToneCurve]（8bit sRGB 暫定パイプライン）+ [RecipeCurve]（master カーブ）+
+ *   [RecipeHsl]（HSL 8系統）。
  * - 純Kotlin（android.* 不使用）。Bitmap への適用は上位層が getPixels/setPixels で
- *   [applyToPixels] に委譲する形で行う。JVM 単体テスト対象。
+ *   [applyToPixels] に委譲する形で行う（ジオメトリは [RecipeGeometry] 経由で適用前段）。
+ *   JVM 単体テスト対象。
+ *
+ * パイプライン順（正本・固定。将来変更時は preview/export 同時に変えること）:
+ *   1) スライダー LUT（sRGB→線形 → 露出 → 温度利得 → 黒レベル → シャドウ → 白レベル →
+ *      ハイライト → コントラスト → 線形→sRGB）
+ *   2) master カーブ（sRGB 表示値ドメイン・R/G/B 等量・LUT 内に合成）
+ *   3) 彩度 / 自然な彩度（画素残差）
+ *   4) HSL 8系統（バンド重み行列、明るさのみ線形光ドメイン）
+ *
+ * 【明示】8bit LUT 適用のため出力は入力に対し最大 ±1 の量子化差を持つ
+ * （既定パラメータでも）。プレビューと書き出しは同値（同一関数）であることを意味する。
  */
 object RecipeDevelopApplier {
 
     /**
-     * 画素配列（ARGB_8888 パック形式）へ develop（トーン LUT + 彩度/自然な彩度）を適用する。
-     * アルファは不変。非有限値は [RecipeToneCurve] 側で中立へ落とす（§7.1）。
-     * パイプライン順（RecipeToneCurve KDoc 参照）:
-     *   sRGB->線形 → 露出 → 温度利得 → 黒レベル → シャドウ → 白レベル →
-     *   ハイライト → コントラスト → 線形->sRGB（LUT化）→ 彩度/自然な彩度（残差）。
-     *
-     * 【明示】8bit LUT 適用のため出力は入力に対し最大 ±1 の量子化差を持つ
-     * （既定パラメータでも）。プレビューと書き出しは同値（同一関数）であることを意味する。
+     * 画素配列（ARGB_8888 パック形式）へ develop を適用する。
+     * アルファは不変。非有限値は各ノード側で中立へ落とす（§7.1）。
      */
     fun applyToPixels(pixels: IntArray, develop: EditRecipe.DevelopParams) {
         val lut = RecipeToneCurve.buildChannelLuts(develop)
@@ -30,16 +37,27 @@ object RecipeDevelopApplier {
             develop.color.vibrance,
             develop.color.saturation,
         )
+        val hslActive = !RecipeHsl.isNeutral(develop.color.hsl)
+        val hslMixer = if (hslActive) RecipeHsl.HslMixer(develop.color.hsl) else null
         val mixBuf = FloatArray(3)
         for (i in pixels.indices) {
             val p = pixels[i]
-            val r = lut[(p ushr 16) and 0xFF] / 255.0f
-            val g = lut[256 + ((p ushr 8) and 0xFF)] / 255.0f
-            val b = lut[512 + (p and 0xFF)] / 255.0f
+            var r = lut[(p ushr 16) and 0xFF] / 255.0f
+            var g = lut[256 + ((p ushr 8) and 0xFF)] / 255.0f
+            var b = lut[512 + (p and 0xFF)] / 255.0f
             mixer.mix(r, g, b, mixBuf)
-            val ir = (mixBuf[0] * 255.0f + 0.5f).toInt().coerceIn(0, 255)
-            val ig = (mixBuf[1] * 255.0f + 0.5f).toInt().coerceIn(0, 255)
-            val ib = (mixBuf[2] * 255.0f + 0.5f).toInt().coerceIn(0, 255)
+            r = mixBuf[0]
+            g = mixBuf[1]
+            b = mixBuf[2]
+            if (hslMixer != null) {
+                hslMixer.apply(r, g, b, mixBuf)
+                r = mixBuf[0]
+                g = mixBuf[1]
+                b = mixBuf[2]
+            }
+            val ir = (r * 255.0f + 0.5f).toInt().coerceIn(0, 255)
+            val ig = (g * 255.0f + 0.5f).toInt().coerceIn(0, 255)
+            val ib = (b * 255.0f + 0.5f).toInt().coerceIn(0, 255)
             pixels[i] = ((p ushr 24 and 0xFF) shl 24) or (ir shl 16) or (ig shl 8) or ib
         }
     }
@@ -49,28 +67,28 @@ object RecipeDevelopApplier {
      * （ADR-014: 無通知に捨てない）。既定値のみのレシピには空を返す。
      *
      * 【適用済みのため警告対象外】tone（露出/コントラスト/ハイライト/シャドウ/白黒レベル）、
-     * 温度、tint、彩度、自然な彩度（[applyToPixels] が処理する）。
-     * 【警告対象】カーブ / HSL / ディテール / ジオメトリ・レンズ / 局所マスク。
+     * 温度、tint、彩度、自然な彩度、master カーブ、HSL 8系統（正規化済み key）。
+     * 【警告対象】R/G/B チャンネルカーブ（master のみ実装）/ ディテール /
+     * ジオメトリの未対応要素（自由角度・光学補正・透視）/ 局所マスク。
      */
     fun unappliedNodeWarnings(recipe: EditRecipe): List<String> {
         val warnings = mutableListOf<String>()
         val d = recipe.develop
-        if (d.curve.rgb != listOf(listOf(0.0, 0.0), listOf(1.0, 1.0)) || d.curve.r.isNotEmpty() ||
-            d.curve.g.isNotEmpty() || d.curve.b.isNotEmpty()
-        ) {
-            warnings += "tone curve not applied (not implemented)"
+        if (d.curve.r.isNotEmpty() || d.curve.g.isNotEmpty() || d.curve.b.isNotEmpty()) {
+            warnings += "R/G/B channel tone curves not applied (master curve only; channels reserved)"
         }
-        if (d.color.hsl.isNotEmpty()) {
-            warnings += "HSL not applied (not implemented)"
+        if (d.color.hsl.any { EditNodeSpecs.parseHslKey(it.key) == null || !it.value.isFinite() }) {
+            warnings += "unknown HSL keys/values preserved only (not applied)"
         }
         if (d.detail.sharpen != 0.0 || d.detail.lumaNoise != 0.0 || d.detail.chromaNoise != 0.0) {
             warnings += "detail nodes not applied (not implemented)"
         }
         val g = recipe.geometry
-        if (g.cropNorm != listOf(0.0, 0.0, 1.0, 1.0) || g.angleDeg != 0.0 || g.mirrorX ||
-            g.lensProfileId != null || g.perspective != null
-        ) {
-            warnings += "geometry/lens corrections not applied (not implemented)"
+        if (!EditNodeSpecs.isAllowedAngle(g.angleDeg)) {
+            warnings += "free-angle geometry rotation not applied (not implemented)"
+        }
+        if (g.lensProfileId != null || g.perspective != null) {
+            warnings += "lens/perspective corrections not applied (not implemented)"
         }
         if (recipe.masks.isNotEmpty()) {
             warnings += "local masks not applied (not implemented)"

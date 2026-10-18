@@ -106,15 +106,35 @@ class RecipeDevelopApplierTest {
     }
 
     @Test
-    fun unappliedNodeWarnings_curve_nonDefault_warns() {
-        val recipe = defaultRecipe().copy(
+    fun unappliedNodeWarnings_masterCurveApplied_noWarning_butChannelCurvesWarn() {
+        // master カーブは適用済みノードのため偽警告にしない（P4 で実装済み）。
+        val master = defaultRecipe().copy(
             develop = defaultDevelop().copy(
                 curve = EditRecipe.Curve(rgb = listOf(listOf(0.0, 0.0), listOf(0.5, 0.6), listOf(1.0, 1.0))),
             ),
         )
-        val warnings = RecipeDevelopApplier.unappliedNodeWarnings(recipe)
+        assertTrue(RecipeDevelopApplier.unappliedNodeWarnings(master).isEmpty())
+        // R/G/B チャンネル別カーブは未実装（master のみ）ため警告する。
+        val channels = defaultRecipe().copy(
+            develop = defaultDevelop().copy(curve = EditRecipe.Curve(r = listOf(listOf(0.0, 0.1)))),
+        )
+        val warnings = RecipeDevelopApplier.unappliedNodeWarnings(channels)
         assertEquals(1, warnings.size)
         assertTrue(warnings[0].contains("curve"))
+    }
+
+    @Test
+    fun unappliedNodeWarnings_geometryAppliedNodes_only_noWarnings() {
+        // 90°回転/反転/規定内クロップは適用済みノード（P4）→ 偽警告にしない。
+        val recipe = defaultRecipe().copy(
+            geometry = EditRecipe.GeometryParams(
+                cropNorm = listOf(0.1, 0.2, 0.9, 1.0),
+                angleDeg = 270.0,
+                mirrorX = true,
+                mirrorY = true,
+            ),
+        )
+        assertTrue(RecipeDevelopApplier.unappliedNodeWarnings(recipe).isEmpty())
     }
 
     @Test
@@ -130,15 +150,27 @@ class RecipeDevelopApplierTest {
     }
 
     @Test
-    fun unappliedNodeWarnings_hslAndDetail_warns() {
-        val recipe = defaultRecipe().copy(
+    fun unappliedNodeWarnings_hslKnownKeyApplied_unknownKeyOrNullWarns() {
+        // 正規化済み key（例 red.hue）は適用済み → 警告しない。
+        val applied = defaultRecipe().copy(
             develop = defaultDevelop().copy(
                 color = EditRecipe.ColorParams(hsl = mapOf("red.hue" to 0.1)),
-                detail = EditRecipe.Detail(sharpen = 0.5),
             ),
         )
-        val warnings = RecipeDevelopApplier.unappliedNodeWarnings(recipe)
-        assertTrue(warnings.any { it.contains("HSL") })
+        assertTrue(RecipeDevelopApplier.unappliedNodeWarnings(applied).isEmpty())
+        // 未知 key は DB 側 PRESERVED_ONLY（値を保持・適用しない）→ 警告する。
+        val foreign = defaultRecipe().copy(
+            develop = defaultDevelop().copy(
+                color = EditRecipe.ColorParams(hsl = mapOf("teal.sat" to 0.2)),
+            ),
+        )
+        assertTrue(RecipeDevelopApplier.unappliedNodeWarnings(foreign).any { it.contains("HSL") })
+
+        // ディテールは未実装 → 警告（そのまま）。
+        val detail = defaultDevelop().copy(detail = EditRecipe.Detail(sharpen = 0.5))
+        val warnings = RecipeDevelopApplier.unappliedNodeWarnings(
+            defaultRecipe().copy(develop = detail),
+        )
         assertTrue(warnings.any { it.contains("detail") })
     }
 }

@@ -183,6 +183,31 @@ ADRは「背景→判断→代替案→効果・代償→検証方法→再検�
 - **検証**: schema evolutionテスト（旧版読み出し→移行→再保存、§3.2必須）。
 - **再検討**: CBOR移行時はdouble encode/decode reference testを行ってから。
 
+## ADR-021 — Room の SQLiteDriver（BundledSQLiteDriver）採用を見送る
+- **状態**: Accepted（採用見送りの判断として確定。実機での障害実証込み）
+- **背景**: Room 2.8 系では SQLiteDriver API が正本経路で、未指定時は端末 framework SQLite（classNames の AAR 依存）に暗黙依存する。ADR-007 の WAL/トランザクション要件を端末差で揺らさないため、SQLite 実装を APK 同梱で固定する候補が検討された（ImageShotDatabase の TODO）。試作 PR で `setDriver(BundledSQLiteDriver())`（androidx.sqlite:sqlite-bundled 2.6.2）を実装した。
+- **判断**: **採用せず、既定の framework factory 経路を維持する。** 試作を端末（TB710FU, API 36）に向けたところ、EditStore の確定操作が使う `androidx.room.withTransaction`（room-ktx, Room 2.8.5 の Android 実装）が `RoomDatabase.getOpenHelper()` で SupportSQLiteOpenHelper(.Factory) を要求し、setDriver 版は
+  `IllegalStateException: Cannot return a SupportSQLiteOpenHelper since no SupportSQLiteOpenHelper.Factory was configured with Room.`
+  （2026-10-18 実機クラッシュ、ジオメトリ確定操作で再現）で実運用不能と実証された。setDriver 併存でも room-ktx の withTransaction Android 実装が driver 経路に接続しないことが根拠。`JournalMode.WRITE_AHEAD_LOGGING` とトランザクション検証は既定経路で維持する。
+- **代替**: EditStore の確定操作を driver 経路の SQLiteConnection API で自前トランザクション化（不採用: Room DAC 検証済み経路を外れ、commit 原子性の再実装規模が大きい）。"param" → 未指定のまま framework に委ねる（採用: 本判断）。
+- **代償**: SQLite 実装は端末 framework 品質に依存する（API 36 専用 minSdk のため差異リスクは小さい但し非零）。DB ポータビリティ（JVM テスト実体・他プラットフォーム）は当分得られない。
+- **テスト**: desktop JVM のユニットテストで Room 実体を開く経路は本モジュール構成では成立しないことを確認済み（① Room の android 変体に Context 無しの builder 無し、② jvm 変体への属性切替は自モジュール投影と不整合）。DAO・WAL・スキーマ検証は既存の実機検証と将来の instrumented androidTest で担保。
+- **再検討条件**: Room の後継 SDK で withTransaction が SQLiteDriver 経路を正規サポートした場合。実機での framework SQLite の WAL/整合問題が実測された場合。
+
+## ADR-022 — EditEvent 正本列挙と payload 永続形式の確定（ADR-020 を暫定から確定へ更新）
+- **状態**: Accepted
+- **背景**: 01_製品仕様書 §5.1–5.3 の操作群（基本調整/ジオメトリ・光学/局所補正）と 02 §3.3 改訂イベント。M0 雛形では全スライダー調整を `eventType="param"` で雑に保存していたため、種別の正本が不在で、将来の種別追加時に未知行の取り扱いが未定だった。ADR-020 は JSON+schemaVersion を「暫定」保存としていた。
+- **判断**:
+  1. **種別正本列挙**: `EditEventKind`（英語安定ID・閉じた列挙・新規IDの再利用禁止）を導入する。M1 実装済み（IMPLEMENTED_M1）: `tone`（露出/コントラスト/ハイライト/シャドウ/白レベル/黒レベル）、`wb`（温度/色合い）、`color`（自然な彩度/彩度）、`curve`（master トーンカーブ 2..16点・単調。R/G/B チャンネル別カーブは M1 不適用・保存は規定済み）、`hsl`（8系統×色相/彩度/明るさ）、`geometry`（90°単位回転/水平・垂直反転/アスペクト比プリセット中央寄せクロップ。自由角度・自由クロップ・透視・光学補正は未実装）。`detail` は RESERVED_M2、`local`（マスク）は RESERVED_M3 — RESERVED は形状未確定であり生成も解釈もしない。eventType は payload の path から `AdjustmentId.kind` で一意に導出する。
+  1b. **追加 payload 形状（v1・追記互換）**: `curve` は `{"curve":{"rgb":[[x,y],...]}, "op":"apply"|"undo"}`（絶対状態ノード方式）、`geometry` は `{"geometry":{"angleDeg":0|90|180|270,"mirrorX":bool,"mirrorY":bool,"crop":[l,t,r,b]}, "op":...}`（crop は回転・反転後の正則方位の正規化座標）、`hsl` は既存スライダー標準 payload（`develop.color.hsl.<band>.<param>`、value −1..1）を共用する。適用順の契約: 幾何補正は develop 前に適用（develop の per-pixel 処理は座標非依換のため可換）、カーブは per-LUT のスライダー map 後・HSL はカーブ後に適用する（Core/render `RecipeDevelopApplier` KDoc 正本）。
+  2. **未知イベントの処理**: 未知種別・RESERVED 種・未知パス・種別と path のドメイン不整合は **PRESERVED_ONLY** — 行は無改写、履歴には表示するが、適用せず既定値に落とさない（§7.1 哲学のレシピへの拡張）。適用/保持/未対応/破損の集計は `EditDecodeSummary`（total/applied/preservedOnly/unsupportedVersion/invalid）として state に明示する。チェックサム不一致と JSON 破損は §3.3 どおり再生から除外し `invalid` に数える。
+  3. **schemaVersion 契約**: payload の `payloadSchemaVersion` が未対応（現在 > 1）の行は同様に保持のみ（`unsupportedVersion`）。codec は未対応バージョンで既定値へフォールバックせず明示失敗する。旧雛形の `"param"` は読み込み互換エイリアスとして path から復元し、新規書込みには使わない。
+  4. **payload 永続形式**: JSON + schemaVersion を **DORMANT な恒久形式として確定**（ADR-020 の本文は変更せず、本ADRで確定性を引き受け、ADR-020 の 再検討条件 を引き継ぐ）。CBOR/Proto への移行は「payload 平均 >16KiB の実測」もしくは「schema 自由度需要の実測」が出た場合のみ、かつ double encode/decode reference test を実装した後でのみ行う。
+- **代替**: CBOR/Proto 即移行／未知種別を既定値やスキップで無音に続行（不採用: 無通知画質破綻の源、ADR-014 に反する）。
+- **代償**: 未知行が DB に残り続ける（展示/集計で訴求する運用に依存）。payload が人可読なため改変リスクは checksum 遮蔽（§3.1）だけが防衛。種別IDの改称・再番号は永続データとの互換を壊す。
+- **検証**: EditStoreTest に追加: 正本ID書込み（tone/color/wb）、未知種別の保持+集計+連続確定、RESERVED 種の保持、未対応 schemaVersion の保持+codec 失敗、旧 "param" エイリアス適用。M1 で `wb` の tint はレシピ保存・UI・イベント経路は有効だが、現行レンダラーは tint を未適用（既知の機能限界、ADR-014 により無通知にしない）。P4 反映（2026-10-18）: curve/hsl/geometry 実装済み化、payload 形状追記、新種別の保存→decode 往復・undo/redo・レンダリング適用は core:render/database の JVM テスト（計25件追加分を含め緑）と実機検証（回転90°→書き出し: 出力 900×1200・develop 適用確認）で機能。
+- **再検討条件**: payload 平均サイズの実測、kotlinx-serialization-cbor 安定版の継続実測、外部プリセット映射（§7）で保存フィールド数が実測的に拡大した場合。
+
 ## 変更管理
 
 1. ADRを更新する場合、元判断を消さず`Superseded by ADR-xxx`を記録する。

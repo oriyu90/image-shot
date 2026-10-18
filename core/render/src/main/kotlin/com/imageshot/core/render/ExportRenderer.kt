@@ -22,7 +22,9 @@ import kotlinx.coroutines.withContext
  * 書き出し用フル解像度再現パス（core:render 内の新規ファイル）。
  * プレビュー（SimpleBitmapPhotoRenderer）と同じノード実装・同じパラメータ（§4 処理パイプライン:
  * 「プレビューと書き出しで同じノード実装とパラメータ、違いは品質設定・タイルスケール・精度のみ」）。
- * develop 適用は RecipeDevelopApplier（純Kotlin共有実装）に委譲する。
+ * develop 適用は RecipeDevelopApplier（純Kotlin共有実装）に委譲する。ジオメトリ
+ * （90°回転・反転・プリセット・クロップ）は RecipeGeometry（純Kotlin ピクセル再索引）の
+ * 共有実装に委譲する。
  *
  * 【明示する制限（未検証を実装済みと報告しない・ADR-014）】
  * - 8bit sRGB 前提の暫定パス。ADR-005 の Linear Rec.2020 float パイプラインではない。
@@ -78,7 +80,7 @@ class ExportBitmapRenderer(context: Context) {
             }
             onStage(Stage.DECODE, 25)
 
-            val processed = applyTone(decoded, recipe)
+            val processed = applyDevelop(decoded, recipe)
             if (processed !== decoded) decoded.recycle()
             onStage(Stage.PROCESS, 45)
 
@@ -165,19 +167,31 @@ class ExportBitmapRenderer(context: Context) {
     }.getOrDefault(Bounds(0, 0))
 
     /**
-     * トーン/色調整（プレビューレンダラーと同一ノード・同一パラメータ、フル解像度で適用）。
-     * 同一実装は RecipeDevelopApplier.applyToPixels（RecipeToneCurve 正本・純Kotlin）へ委譲する。
-     * 【明示】カーブ・HSL・マスク・ジオメトリ・レンズ補正・ディテールは未適用。
+     * ジオメトリ + develop（プレビューレンダラーと同一ノード・同一パラメータ、フル解像度で適用）。
+     * パイプライン順: decode → ジオメトリ（RecipeGeometry.applyIfNeeded: 回転→反転→クロップ、
+     * ピクセル再索引=無劣化）→ develop（RecipeDevelopApplier.applyToPixels 共有実装）→ resize。
+     * 【明示】プレビューは inSampleSize によるダウンサンプル後に同一変換を適用するため、
+     * クロップは正規化座標で一致するが、画素グリッドの丸め差（±1px 相当）は原理的に残る。
+     * R/G/B チャンネルカーブ・自由角度・光学補正・局所マスク・ディテールは未適用。
      * 既定値でない場合は buildWarnings 経由で必ず警告する（ADR-014）。
      */
-    private fun applyTone(source: Bitmap, recipe: EditRecipe): Bitmap {
+    private fun applyDevelop(source: Bitmap, recipe: EditRecipe): Bitmap {
         val width = source.width
         val height = source.height
-        val pixels = IntArray(width * height)
+        var pixels = IntArray(width * height)
         source.getPixels(pixels, 0, width, 0, 0, width, height)
+        val g = recipe.geometry
+        val plane = RecipeGeometry.applyIfNeeded(
+            RecipeGeometry.PixPlane(pixels, width, height),
+            g.angleDeg,
+            g.mirrorX,
+            g.mirrorY,
+            g.cropNorm,
+        )
+        pixels = plane.pixels
         RecipeDevelopApplier.applyToPixels(pixels, recipe.develop)
-        val out = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        out.setPixels(pixels, 0, width, 0, 0, width, height)
+        val out = Bitmap.createBitmap(plane.width, plane.height, Bitmap.Config.ARGB_8888)
+        out.setPixels(pixels, 0, plane.width, 0, 0, plane.width, plane.height)
         return out
     }
 

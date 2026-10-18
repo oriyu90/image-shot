@@ -81,10 +81,13 @@ data class EditRecipe(
 
     @kotlinx.serialization.Serializable
     data class GeometryParams(
-        /** cropNorm: [x0,y0,x1,y1] 正規化座標（0.0..1.0）。 */
+        /** cropNorm: [x0,y0,x1,y1] 正規化座標（0.0..1.0）。回転・反転後の正準向きで定義する。 */
         val cropNorm: List<Double> = listOf(0.0, 0.0, 1.0, 1.0),
+        /** 回転は 90°刻みのみ（EditNodeSpecs.ALLOWED_ANGLE_DEG）。自由角度は M1 未実装。 */
         val angleDeg: Double = 0.0,
         val mirrorX: Boolean = false,
+        /** 垂直反転（M1 追加。旧データの復号では既定 false の追加フィールド）。 */
+        val mirrorY: Boolean = false,
         val lensProfileId: String? = null,
         val perspective: Map<String, Double>? = null,
     )

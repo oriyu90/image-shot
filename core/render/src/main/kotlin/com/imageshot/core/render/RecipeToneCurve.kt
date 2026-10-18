@@ -21,7 +21,14 @@ import kotlin.math.roundToInt
  *   （境界で 0 → 連続・単調を保持、対側は恒等）。
  * - 露出・温度のみ線形光量ドメインで掛ける（sRGB ← -> 線形 変換を含む）。
  * - 彩度・自然な彩度（Vibrance）のみ画素ごとの残差演算（LUT化不能）。
- * - カーブ/HSL/ディテール/局所マスク/ジオメトリは本クラスには存在しない（未実装）。
+ * - トーンカーブ（全体/master、[RecipeCurve]）: スライダー写像後の sRGB 表示値ドメインで
+ *   R/G/B 等量に適用する（= グレー軸を歪めない単調再写像）。中立カーブは
+ *   恒等 short-circuit（量子化ドリフトを作らない）。R/G/B チャンネル別カーブは M1 対応外
+ *   （読まない・警告対象）。ディテール/局所マスク/ジオメトリは本クラスには存在しない。
+ *
+ * パイプライン順（RecipeDevelopApplier の正本と同一）:
+ *   sRGB→線形 → 露出 → 温度利得 → 黒レベル → シャドウ → 白レベル → ハイライト →
+ *   コントラスト → 線形→sRGB → master カーブ（本LUT内）→ [画素ループ: 彩度/自然な彩度 → HSL]。
  */
 object RecipeToneCurve {
 
@@ -98,6 +105,12 @@ object RecipeToneCurve {
 
         val gains = tempGains(develop.whiteBalance.tempKelvin)
 
+        // master カーブ（中立なら null = 恒等。曲線評価は評価済み制御点のみで行う）。
+        val curvePoints: List<List<Double>>? = when {
+            RecipeCurve.isNeutral(develop.curve.rgb) -> null
+            else -> RecipeCurve.normalized(develop.curve.rgb) // 不正形は恒等に落とす（警告側は通知する）。
+        }
+
         val lut = IntArray(768)
         for (v in 0..255) {
             val linear = srgbToLinear(v / 255.0) * exScale
@@ -109,7 +122,9 @@ object RecipeToneCurve {
                 l = mapHighlights(l, highlights)
                 l = mapContrast(l, contrast)
                 l = l.coerceIn(0.0, 1.0)
-                lut[ch * 256 + v] = (linearToSrgb(l) * 255.0).roundToInt().coerceIn(0, 255)
+                var display = linearToSrgb(l)
+                if (curvePoints != null) display = RecipeCurve.evaluate(curvePoints, display)
+                lut[ch * 256 + v] = (display.coerceIn(0.0, 1.0) * 255.0).roundToInt().coerceIn(0, 255)
             }
         }
         return lut

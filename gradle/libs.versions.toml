@@ -17,6 +17,8 @@ navigation = "2.9.5"
 composeBom = "2025.06.01"
 
 room = "2.8.5"
+# BundledSQLiteDriver は ADR-021 により未採用（Room-ktx withTransaction との非互換・実機証明）。
+# Room 2.8.5 が require する androidx.sqlite 2.6.2 は room-runtime が推移依存で解決する。
 workManager = "2.10.5"
 kotlinxSerializationJson = "1.11.0"
 kotlinxCoroutines = "1.10.2"
