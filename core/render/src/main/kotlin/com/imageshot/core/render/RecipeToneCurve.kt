@@ -27,8 +27,9 @@ import kotlin.math.roundToInt
  *   （読まない・警告対象）。ディテール/局所マスク/ジオメトリは本クラスには存在しない。
  *
  * パイプライン順（RecipeDevelopApplier の正本と同一）:
- *   sRGB→線形 → 露出 → 温度利得 → 黒レベル → シャドウ → 白レベル → ハイライト →
- *   コントラスト → 線形→sRGB → master カーブ（本LUT内）→ [画素ループ: 彩度/自然な彩度 → HSL]。
+ *   sRGB→線形 → 露出 → 温度利得 → tint利得（両者の積を合成して1回掛ける） → 黒レベル →
+ *   シャドウ → 白レベル → ハイライト → コントラスト → 線形→sRGB → master カーブ（本LUT内）→
+ *   [画素ループ: 彩度/自然な彩度 → HSL]。
  */
 object RecipeToneCurve {
 
@@ -56,6 +57,25 @@ object RecipeToneCurve {
         // rel > 0（暖色、低K）→ R 増 / B 減。 rel < 0（寒色、高K）→ R 減 / B 増。
         val strength = 0.4
         return doubleArrayOf(1.0 + strength * rel, 1.0, 1.0 - strength * rel)
+    }
+
+    /**
+     * tint → R/G/B のチャンネル利得（設計上の近似・未検証）。
+     *
+     * 【設計段であり画質検証は未実施】LR 風の緑／マゼンタ軸の近似で、
+     *   t > 0（緑寄り）: G *= (1 + 0.30 t)、R *= (1 − 0.15 t)、B *= (1 − 0.15 t)
+     *   t < 0（マゼンタ寄り）: 逆方向（R・B 増 / G 減）。
+     * 係数（+0.30 / −0.15）は温度利得（strength 0.4）と同格の暫定近似値であり、
+     * golden テスト・ΔE 計測は未実施。グレー軸の輝度は t = ±1 で積が最大 ≈ (1.30×0.85) と
+     * 1から逸脱するが、温度利得の前例（luma 合成値の1からの逸脱を許容する）と同じ方針で受け
+     * 入れ、画質への実際の影響は後段 ADR/実測で判断する。
+     * null / 非有限 → 中立 [1,1,1]。範囲外は [-1,1] へクランプ。
+     * 適用点は [buildChannelLuts]（温度利得との要素積を合成して1回掛ける）。
+     */
+    fun tintGains(tint: Double?): DoubleArray {
+        if (tint == null || !finite(tint)) return doubleArrayOf(1.0, 1.0, 1.0)
+        val t = tint.coerceIn(-1.0, 1.0)
+        return doubleArrayOf(1.0 - 0.15 * t, 1.0 + 0.30 * t, 1.0 - 0.15 * t)
     }
 
     // ---- トーン区分写像（連続・単調、作用半面のみ変化）----
@@ -103,7 +123,10 @@ object RecipeToneCurve {
         val whites = norm(tone.whites)
         val blacks = norm(tone.blacks)
 
-        val gains = tempGains(develop.whiteBalance.tempKelvin)
+        val temp = tempGains(develop.whiteBalance.tempKelvin)
+        val tint = tintGains(develop.whiteBalance.tint)
+        // 温度利得 × tint利得 を要素積で合成（同一の設計段近似系・LUT 内で1回の掛け算で完結）。
+        val gains = DoubleArray(3) { temp[it] * tint[it] }
 
         // master カーブ（中立なら null = 恒等。曲線評価は評価済み制御点のみで行う）。
         val curvePoints: List<List<Double>>? = when {

@@ -18,14 +18,18 @@ import kotlinx.coroutines.withContext
  *
  * M1前半で実装した調整ノード（8bit sRGB 一時パイプライン）:
  *   露出EV / コントラスト / ハイライト / シャドウ / 白レベル / 黒レベル /
- *   彩度 / 自然な彩度 / 温度（as-shot 相対）/ 色合い（近似）。
+ *   彩度 / 自然な彩度 / 温度（as-shot 相対）/ 色合い（tint・RecipeToneCurve.tintGains 近似）。
  *   ノードは RecipeDevelopApplier（純Kotlin共有実装）経由で RecipeToneCurve の式設計に
  *   委譲する（画質未検証・golden 未実施。書き出し ExportBitmapRenderer も同一の共有実装）。
  *
  * 明示する制約（M1雛形であり、以下を「実装済み」とは報告しない）:
  * - 8bit sRGB 前提の暫定パス。ADR-005 の Linear Rec.2020 float パイプラインではない。
- * - 入力ICC/EXIF向き/ディテール/局所マスクは未適用。無通知に捨てないため、
- *   結果 warnings に常に降格警告を含める（ADR-014）。
+ * - 入力 ICC: SourceDecode（ImageDecoder setTargetColorSpace）で sRGB 出力変換を要求。
+ *   実測検証で真偽を分けて警告文にする（恒降格ではない）。
+ * - EXIF向き: SourceOrientation による手動正規化（SourceDecodePolicy の戦略に従う）。
+ *   読めない場合は正規化せず警告する。
+ * - ディテール/局所マスクは未適用。無通知に捨てないため、結果 warnings に降格警告を
+ *   保つ（ADR-014）。
  * - P4 で追加されたノード: master カーブ / HSL 8系統 / ジオメトリ（90°回転・反転・
  *   プリセット・クロップ）。R/G/B チャンネルカーブ・自由角度・光学補正は未適用。
  * - 巨大Bitmapの多重保持を避ける: 結果は RenderBitmapStore（文書ごと直近3世代）に置き、
@@ -80,13 +84,14 @@ class SimpleBitmapPhotoRenderer(
                 )
             }
 
-            val source = decodePreviewSource(uri, request)
+            val decoded = decodePreviewSource(uri, request)
                 ?: return@withContext ImageOpResult.Failure(
                     ErrorCode.UNSUPPORTED_CODEC,
                     "preview decode failed",
                 )
+            val source = decoded.bitmap
 
-            val output = applyDevelop(source, recipe)
+            val output = applyDevelop(source, recipe, decoded.sourceOrientation)
             source.recycle()
 
             val bitmapKey = RenderBitmapStore.keyFor(request.documentId, request.generationId)
@@ -94,7 +99,8 @@ class SimpleBitmapPhotoRenderer(
 
             val result = RenderResult(
                 bitmapHandle = bitmapKey,
-                // 暫定: 入力ICCを無視した扱い。実力を偽らず、警告として必ず明示する（§6.1）。
+                // 作業上の色空間表記（8bit sRGB）。入力 ICC の解像は SourceDecode の sRGB ターゲット
+                // 変換に依存し、実測検証の結果を warnings で明示する（§6.1・実力を偽らない）。
                 actualSpace = "srgb-d65",
                 transfer = "iec61966-2-1",
                 gamut = "srgb",
@@ -102,7 +108,7 @@ class SimpleBitmapPhotoRenderer(
                 histogram = emptyList(),
                 revision = request.revision,
                 generationId = request.generationId,
-                warnings = RENDER_WARNINGS.toList(),
+                warnings = renderWarnings(decoded),
             )
             latest[request.documentId] = result
             ImageOpResult.Success(result)
@@ -132,24 +138,24 @@ class SimpleBitmapPhotoRenderer(
         bitmaps.close(docId)
     }
 
-    /** 簡易ピラミッド: requestedPx を下限に合わせ inSampleSize で読む（§4.3 全体プレビューの簡易版）。 */
-    private suspend fun decodePreviewSource(uri: Uri, request: RenderRequest): Bitmap? =
-        withContext(Dispatchers.IO) {
-            runCatching {
-                val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                appContext.contentResolver.openInputStream(uri)!!.use {
-                    android.graphics.BitmapFactory.decodeStream(it, null, bounds)
-                }
-                val sample = maxSampleFor(bounds.outWidth, request.requestedPx)
-                val opts = android.graphics.BitmapFactory.Options().apply {
-                    inSampleSize = sample
-                    inPreferredConfig = Bitmap.Config.ARGB_8888
-                }
-                appContext.contentResolver.openInputStream(uri)!!.use {
-                    android.graphics.BitmapFactory.decodeStream(it, null, opts)
-                }
-            }.getOrNull()
-        }
+    /**
+     * 共有デコードパス（SourceDecode）経由の簡易ピラミッド:
+     * requestedPx を下限に合わせ sampleSize で読む（§4.3 全体プレビューの簡易版）。
+     * 色空間（sRGB ターゲット）と EXIF orientation の読み取りも SourceDecode に集約する。
+     */
+    private suspend fun decodePreviewSource(
+        uri: Uri,
+        request: RenderRequest,
+    ): SourceDecode.Result? = withContext(Dispatchers.IO) {
+        runCatching {
+            val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            appContext.contentResolver.openInputStream(uri)!!.use {
+                android.graphics.BitmapFactory.decodeStream(it, null, bounds)
+            }
+            val sample = maxSampleFor(bounds.outWidth, request.requestedPx)
+            SourceDecode.decode(appContext.contentResolver, uri, sample)
+        }.getOrNull()
+    }
 
     private fun maxSampleFor(width: Int, requestedPx: Int): Int {
         if (width <= 0 || requestedPx <= 0) return 1
@@ -159,22 +165,28 @@ class SimpleBitmapPhotoRenderer(
     }
 
     /**
-     * ジオメトリ + develop 適用（8bit sRGB 暫定）。
+     * 正規化 + ジオメトリ + develop 適用（8bit sRGB 暫定）。
      * 書き出し（ExportBitmapRenderer）と同一ノード実装へ委譲する:
-     *   RecipeGeometry.apply（回転→反転→クロップ、純Kotlin ピクセル再索引）
+     *   SourceOrientation.normalize（EXIF 1..8 正規化・ユーザージオメトリの前に適用）
+     *   → RecipeGeometry.apply（回転→反転→クロップ、純Kotlin ピクセル再索引）
      *   → RecipeDevelopApplier.applyToPixels（RecipeToneCurve/RecipeCurve/RecipeHsl 正本）。
      * 未実装ノードの有効値が入り込んでも無通知適用はしない（ADR-014、warnings 由来）。
      * ディテール/光学補正/局所マスクはこの段階では読まない。
      */
-    private fun applyDevelop(source: Bitmap, recipe: EditRecipe): Bitmap {
+    private fun applyDevelop(source: Bitmap, recipe: EditRecipe, sourceOrientation: Int): Bitmap {
         val width = source.width
         val height = source.height
         var pixels = IntArray(width * height)
         source.getPixels(pixels, 0, width, 0, 0, width, height)
 
+        // EXIF向きの正規化をユーザー自身のジオメトリの「前」に行う（合成順は決定的）。
+        val normalized = SourceOrientation.normalize(
+            RecipeGeometry.PixPlane(pixels, width, height),
+            sourceOrientation,
+        )
         val g = recipe.geometry
         val plane = RecipeGeometry.applyIfNeeded(
-            RecipeGeometry.PixPlane(pixels, width, height),
+            normalized,
             g.angleDeg,
             g.mirrorX,
             g.mirrorY,
@@ -191,12 +203,45 @@ class SimpleBitmapPhotoRenderer(
     }
 
     companion object {
-        /** 機能縮退の一覧（ADR-014: 無通知縮退の禁止）。常時提示する降格警告。 */
+        /**
+         * 恒常降格の正本一覧（ADR-014: 無通知縮降の禁止）。
+         * 入力解像（ICC sRGB 変換・EXIF orientation）は実測により真偽が変わるため、
+         * 条件付き文言は [renderWarnings] で組み立てる（本配列は常に真の恒常降格のみ）。
+         * 縮減語が弱まっていないこと（8bit パイプライン・未実装ノード等を残す）。
+         */
         val RENDER_WARNINGS = arrayOf(
             "8bit-sRGB CPU fallback pipeline (ADR-005 float/tile pipeline not implemented)",
-            "input ICC / EXIF orientation not yet applied",
             "unimplemented nodes ignored: detail, vignette, local masks (curve/HSL/geometry are applied)",
             "tone/curve/HSL node formulas are design-stage; visual quality unverified (no golden tests)",
         )
+
+        /**
+         * デコード実測を反映した警告リスト（恒常降格 + 入力解像の条件文言）。
+         * - ICC: sRGB 変換を検証できた場合のみ「変換済み」。検証不能では想定を明示する。
+         * - EXIF orientation: 戦略別の明示（読めない場合の未正規化も明示）。
+         * - BitmapFactory へのフォールバックが発生した場合の追加警告。
+         */
+        fun renderWarnings(decode: SourceDecode.Result?): List<String> {
+            val warnings = mutableListOf<String>()
+            warnings += RENDER_WARNINGS
+            if (decode != null && decode.colorSpaceConverted) {
+                warnings += "input ICC converted to working sRGB by platform decoder (ImageDecoder setTargetColorSpace)"
+            } else {
+                warnings += "input ICC sRGB conversion could not be verified; treated as sRGB"
+            }
+            warnings +=
+                when {
+                    decode == null || decode.sourceOrientation == 0 ->
+                        "source EXIF orientation unreadable: not normalized"
+                    decode.orientationAppliedByUs ->
+                        "EXIF orientation normalized (manual pixel transform, orientation=${decode.sourceOrientation})"
+                    SourceDecodePolicy.exifStrategy == ExifStrategy.PLATFORM_APPLIED ->
+                        "EXIF orientation delegated to platform decoder (ImageDecoder; device verification pending), " +
+                            "orientation=${decode.sourceOrientation}"
+                    else -> "EXIF orientation 1 (normal): no orientation transform needed"
+                }
+            if (decode?.usedFallback == true) warnings += SourceDecode.FALLBACK_BITMAP_FACTORY_WARNING
+            return warnings
+        }
     }
 }

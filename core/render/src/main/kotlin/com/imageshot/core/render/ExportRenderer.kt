@@ -24,15 +24,21 @@ import kotlinx.coroutines.withContext
  * 「プレビューと書き出しで同じノード実装とパラメータ、違いは品質設定・タイルスケール・精度のみ」）。
  * develop 適用は RecipeDevelopApplier（純Kotlin共有実装）に委譲する。ジオメトリ
  * （90°回転・反転・プリセット・クロップ）は RecipeGeometry（純Kotlin ピクセル再索引）の
- * 共有実装に委譲する。
+ * 共有実装に委譲する。デコードは SourceDecode（共有パス）を使う。
  *
  * 【明示する制限（未検証を実装済みと報告しない・ADR-014）】
  * - 8bit sRGB 前提の暫定パス。ADR-005 の Linear Rec.2020 float パイプラインではない。
  *   develop 適用は CPU 画素ループ（性能実測は未実施・報告書参照）。
- * - EXIF向き・入力ICC・Gainmap は未解決（プレビュー実装と同じ）→ 必ず warnings に明示する。
+ * - 入力 ICC: SourceDecode（ImageDecoder setTargetColorSpace）で sRGB への出力変換を要求し、
+ *   デコード後の実測（bitmap.colorSpace 照合）で検証できた場合のみ「変換済み」の警告文にする
+ *   （検証不能では過大記述をしない）。
+ * - EXIF向き: SourceDecode が読んだ値を SourceOrientation で手動正規化する
+ *   （MANUAL_APPLY 既定・戦略は SourceDecodePolicy 参照。読めない場合は正規化せず警告）。
+ * - Gainmap (Ultra HDR) は未解決 → 必ず warnings に明示する（SDR トーンのみ）。
  * - 出力は新規エンコードのみ。
  * - メタデータ: EXIF/GPS は書き込まない（最小化・GPS除去、§8）。EXIF pass-through は未実装。
- *   ICC sRGB タグ付与：JPEG は未実装（本PR対象外、報告書参照）。PNG は sRGB チャンクを付与する。
+ *   ICC sRGB タグ付与：JPEG は MinimalSrgbIcc + JpegIcc で APP2 挿入（既存 ICC/破綻セグメント
+ *   では挿入を中止し、その旨を警告する）。PNG は sRGB チャンクを付与する。
  */
 class ExportBitmapRenderer(context: Context) {
 
@@ -65,14 +71,9 @@ class ExportBitmapRenderer(context: Context) {
                 )
             }
 
-            val decoded = BitmapFactory.decodeStream(
-                appContext.contentResolver.openInputStream(source),
-                null,
-                BitmapFactory.Options().apply {
-                    inPreferredConfig = Bitmap.Config.ARGB_8888
-                    inSampleSize = 1
-                },
-            ) ?: return@withContext failure(ErrorCode.UNSUPPORTED_CODEC, "full-res decode failed")
+            val decodedResult = SourceDecode.decode(appContext.contentResolver, source, 1)
+                ?: return@withContext failure(ErrorCode.UNSUPPORTED_CODEC, "full-res decode failed")
+            val decoded = decodedResult.bitmap
 
             if (shouldCancel()) {
                 decoded.recycle()
@@ -80,7 +81,7 @@ class ExportBitmapRenderer(context: Context) {
             }
             onStage(Stage.DECODE, 25)
 
-            val processed = applyDevelop(decoded, recipe)
+            val processed = applyDevelop(decoded, recipe, decodedResult.sourceOrientation)
             if (processed !== decoded) decoded.recycle()
             onStage(Stage.PROCESS, 45)
 
@@ -92,17 +93,20 @@ class ExportBitmapRenderer(context: Context) {
             }
             onStage(Stage.PROCESS, 55)
 
-            // 警告の評価は recycle() より前に実施する（recycled Bitmap の状態参照を避ける）。
-            val warnings = buildWarnings(recipe, finalBitmap, spec)
+            // 警告の基礎は recycle() より前に評価する（recycled Bitmap の状態参照を避ける）。
+            var warnings = buildWarnings(recipe, finalBitmap, spec, decodedResult)
 
             val digest = MessageDigest.getInstance("SHA-256")
             val digestOut = DigestOutputStream(target, digest)
             val width = finalBitmap.width
             val height = finalBitmap.height
 
-            val failure = encodeAndWrite(finalBitmap, spec, digestOut, onStage)
+            val encodeOutcome = encodeAndWrite(finalBitmap, spec, digestOut, onStage)
             finalBitmap.recycle()
-            if (failure != null) return@withContext failure
+            val failureEnc = encodeOutcome.failure
+            if (failureEnc != null) return@withContext failureEnc
+            // エンコード段の追警告（ICC 挿入を中止した等）を成果物の warnings に足す。
+            warnings += encodeOutcome.extraWarnings
 
             onStage(Stage.ENCODE, 95)
             ImageOpResult.Success(
@@ -125,32 +129,53 @@ class ExportBitmapRenderer(context: Context) {
         }
     }
 
-    /** エンコードとターゲットへの書き込み。成功時 null、失敗時は分類済み Failure を返す。 */
+    /** エンコードとターゲットへの書き込み。失敗時は failure を、追加警告は extraWarnings を返す。 */
+    private class EncodeOutcome(
+        val failure: ImageOpResult.Failure?,
+        val extraWarnings: List<String> = emptyList(),
+    )
+
     private fun encodeAndWrite(
         bitmap: Bitmap,
         spec: ExportRenderSpec,
         digestOut: DigestOutputStream,
         onStage: (Stage, Int) -> Unit,
-    ): ImageOpResult.Failure? {
+    ): EncodeOutcome {
         return when (spec.format.uppercase()) {
             FORMAT_JPEG -> {
-                val ok = bitmap.compress(Bitmap.CompressFormat.JPEG, spec.quality, digestOut)
+                // sRGB ICC 埋め込み（W4）のためエンコードをメモリで受け、APP2 挿入後に書き出す
+                // （既存の digest/SOS 前提は不変 — digest は最終書出byte列に一致する）。
+                onStage(Stage.ENCODE, 70)
+                val mem = ByteArrayOutputStream()
+                if (!bitmap.compress(Bitmap.CompressFormat.JPEG, spec.quality, mem)) {
+                    return EncodeOutcome(failure(ErrorCode.EXPORT_INTERRUPTED, "JPEG encode failed"))
+                }
+                var bytes = mem.toByteArray()
+                val extra = mutableListOf<String>()
+                val embedded = JpegIcc.insertApp2IccProfile(bytes, MinimalSrgbIcc.profileBytes())
+                if (embedded == null) {
+                    // 既に ICC APP2 がある / 構造破綻 → 二重付与せず、そのまま書き出して明示する。
+                    extra += "JPEG ICC embedding skipped: APP2 ICC profile already present or segment malformed"
+                } else {
+                    bytes = embedded
+                }
+                digestOut.write(bytes)
                 digestOut.flush()
-                if (!ok) failure(ErrorCode.EXPORT_INTERRUPTED, "JPEG encode failed") else null
+                EncodeOutcome(null, extra)
             }
             FORMAT_PNG -> {
                 // sRGB チャンク付与のため、エンコードをメモリで受け、IEND 直前に挿入してから書き出す。
                 onStage(Stage.ENCODE, 70)
                 val mem = ByteArrayOutputStream()
                 if (!bitmap.compress(Bitmap.CompressFormat.PNG, 100, mem)) {
-                    return failure(ErrorCode.EXPORT_INTERRUPTED, "PNG encode failed")
+                    return EncodeOutcome(failure(ErrorCode.EXPORT_INTERRUPTED, "PNG encode failed"))
                 }
                 val withSrgb = PngMetadata.insertSrgbChunk(mem.toByteArray())
                 digestOut.write(withSrgb)
                 digestOut.flush()
-                null
+                EncodeOutcome(null)
             }
-            else -> failure(ErrorCode.UNSUPPORTED_CODEC, "unsupported export format: ${spec.format}")
+            else -> EncodeOutcome(failure(ErrorCode.UNSUPPORTED_CODEC, "unsupported export format: ${spec.format}"))
         }
     }
 
@@ -167,22 +192,27 @@ class ExportBitmapRenderer(context: Context) {
     }.getOrDefault(Bounds(0, 0))
 
     /**
-     * ジオメトリ + develop（プレビューレンダラーと同一ノード・同一パラメータ、フル解像度で適用）。
-     * パイプライン順: decode → ジオメトリ（RecipeGeometry.applyIfNeeded: 回転→反転→クロップ、
-     * ピクセル再索引=無劣化）→ develop（RecipeDevelopApplier.applyToPixels 共有実装）→ resize。
-     * 【明示】プレビューは inSampleSize によるダウンサンプル後に同一変換を適用するため、
-     * クロップは正規化座標で一致するが、画素グリッドの丸め差（±1px 相当）は原理的に残る。
+     * 正規化 + ジオメトリ + develop（プレビューレンダラーと同一ノード・同一パラメータ、フル解像度で適用）。
+     * パイプライン順: decode（SourceDecode・sRGBターゲット）→ EXIF向き正規化
+     * （SourceOrientation.normalize: orientation 1..8、不明（0）は恒等に落とす・警告側に通知）→
+     * ジオメトリ（RecipeGeometry.applyIfNeeded: 回転→反転→クロップ、ピクセル再索引=無劣化）→
+     * develop（RecipeDevelopApplier.applyToPixels 共有実装）→ resize。
+     * 【明示】プレビューはサンプリング後の同一変換を適用するため、クロップは正規化座標で
+     * 一致するが、画素グリッドの丸め差（±1px 相当）は原理的に残る。
      * R/G/B チャンネルカーブ・自由角度・光学補正・局所マスク・ディテールは未適用。
      * 既定値でない場合は buildWarnings 経由で必ず警告する（ADR-014）。
      */
-    private fun applyDevelop(source: Bitmap, recipe: EditRecipe): Bitmap {
+    private fun applyDevelop(source: Bitmap, recipe: EditRecipe, sourceOrientation: Int): Bitmap {
         val width = source.width
         val height = source.height
         var pixels = IntArray(width * height)
         source.getPixels(pixels, 0, width, 0, 0, width, height)
+        val plane0 = RecipeGeometry.PixPlane(pixels, width, height)
+        // EXIF向きの正規化をユーザー自身のジオメトリの「前」に行う（合成順は決定的・正規化→ユーザー）。
+        val normalized = SourceOrientation.normalize(plane0, sourceOrientation)
         val g = recipe.geometry
         val plane = RecipeGeometry.applyIfNeeded(
-            RecipeGeometry.PixPlane(pixels, width, height),
+            normalized,
             g.angleDeg,
             g.mirrorX,
             g.mirrorY,
@@ -204,17 +234,28 @@ class ExportBitmapRenderer(context: Context) {
         return Bitmap.createScaledBitmap(source, newW, newH, true)
     }
 
-    private fun buildWarnings(recipe: EditRecipe, result: Bitmap, spec: ExportRenderSpec): List<String> {
+    /** 実装済み範囲と未検証の境目を示す警告の正本（過大記述をしない・§6.1/ADR-014）。 */
+    private fun buildWarnings(
+        recipe: EditRecipe,
+        result: Bitmap,
+        spec: ExportRenderSpec,
+        decode: SourceDecode.Result,
+    ): List<String> {
         val warnings = mutableListOf(
             // 8bit sRGB CPU パイプライン（プレビューと同一ノード実装）は恒常降格として明示（§6.1/ADR-014）。
             "8bit-sRGB CPU fallback pipeline at export (same node implementation as preview; ADR-005 float pipeline not implemented)",
-            // 入力未解析警告は必ず付与する（§6.1、実力を偽らない）。EXIF/ICC/Gainmap 対応は別PR。
-            "input ICC / EXIF orientation / gainmap not applied at export",
+            // 入力 ICC（W1）: 実測検証できた場合のみ「変換済み」と述べる（それ以外は検証不能と明示）。
+            if (decode.colorSpaceConverted) {
+                "input ICC converted to working sRGB by platform decoder (ImageDecoder setTargetColorSpace)"
+            } else {
+                "input ICC sRGB conversion could not be verified; treated as sRGB"
+            },
+            exifWarning(decode),
+            // Gainmap (Ultra HDR) は未解決 → 必ず明示する（SDR トーンのみ・降格維持）。
+            "HDR gainmap (Ultra HDR) not processed; SDR tone only",
             "export metadata minimized: no EXIF/GPS written; EXIF pass-through not implemented",
         )
-        if (spec.format.equals(FORMAT_JPEG, ignoreCase = true)) {
-            warnings += "ICC sRGB tag for JPEG not implemented (output assumed sRGB, untagged)"
-        }
+        if (decode.usedFallback) warnings += SourceDecode.FALLBACK_BITMAP_FACTORY_WARNING
         // この段階で読まないノードは、既定値でないときのみ警告する（develop 適用ノードを偽警告にしない）。
         warnings += RecipeDevelopApplier.unappliedNodeWarnings(recipe)
         if (recipe.displayIntent != "auto-sdr-hdr") {
@@ -227,6 +268,23 @@ class ExportBitmapRenderer(context: Context) {
             warnings += "unknown recipe extensions preserved in recipe storage only"
         }
         return warnings
+    }
+
+    /**
+     * EXIF 向きの扱いを戦略別に明示する行。
+     * - 読めない（0）: 正規化せず（不明は不明のまま）。
+     * - 手動正規化を実行: orientation を添えて明示。
+     * - PLATFORM_APPLIED: 実機検証未了であることを付記（検証前の過大記述をしない）。
+     * - 手動戦略で 1（normal）: 変換不要を明示。
+     */
+    private fun exifWarning(decode: SourceDecode.Result): String = when {
+        decode.sourceOrientation == 0 -> "source EXIF orientation unreadable: not normalized"
+        decode.orientationAppliedByUs ->
+            "EXIF orientation normalized (manual pixel transform, orientation=${decode.sourceOrientation})"
+        SourceDecodePolicy.exifStrategy == ExifStrategy.PLATFORM_APPLIED ->
+            "EXIF orientation delegated to platform decoder (ImageDecoder; device verification pending), " +
+                "orientation=${decode.sourceOrientation}"
+        else -> "EXIF orientation 1 (normal): no orientation transform needed"
     }
 
     private companion object {

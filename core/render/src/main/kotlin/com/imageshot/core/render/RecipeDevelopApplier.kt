@@ -68,6 +68,13 @@ object RecipeDevelopApplier {
      *
      * 【適用済みのため警告対象外】tone（露出/コントラスト/ハイライト/シャドウ/白黒レベル）、
      * 温度、tint、彩度、自然な彩度、master カーブ、HSL 8系統（正規化済み key）。
+     *   温度: チャンネル利得 = RecipeToneCurve.tempGains（mired 相対・strength 0.4、R+/B−）。
+     *   tint : チャンネル利得 = RecipeToneCurve.tintGains（設計段近似・未検証:
+     *          t>0 で緑寄り — G *= (1+0.30t)、R *= B *= (1−0.15t)。t<0 はマゼンタ寄りの逆方向。
+     *          係数は温度利得と同格の暫定値。RecipeToneCurve.tintGains の KDoc 参照）。
+     *          両利得は buildChannelLuts 内で要素積として合成され、LUT で1回だけ掛かる
+     *          （旧実装では tint は暗黙に無視されていた。今回から実際に効く。トーンパイプライン
+     *          順序自体は変更していない）。
      * 【警告対象】R/G/B チャンネルカーブ（master のみ実装）/ ディテール /
      * ジオメトリの未対応要素（自由角度・光学補正・透視）/ 局所マスク。
      */

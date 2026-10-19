@@ -69,6 +69,9 @@ androidx-test-runner = { module = "androidx.test:runner", version = "1.7.0" }
 androidx-test-ext-junit = { module = "androidx.test.ext:junit", version.ref = "androidxTestExtJunit" }
 androidx-test-uiautomator = { module = "androidx.test.uiautomator:uiautomator", version.ref = "androidxTestUiautomator" }
 
+# EXIF orientation 読み取り（SourceDecode 共有デコードパスで使用。androidx 実装は InputStream からの読取に対応）
+androidx-exifinterface = { module = "androidx.exifinterface:exifinterface", version = "1.4.1" }
+
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 android-library = { id = "com.android.library", version.ref = "agp" }
