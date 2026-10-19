@@ -59,4 +59,10 @@ dependencies {
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.androidx.test.uiautomator)
+    // PR-5: golden ΔE 計測（プレビュー/書き出し同値契約の device 計測ハーネス用）。
+    // core:render は model を implementation で拾うため、androidTest 側では双方を明示参照する。
+    androidTestImplementation(project(":core:render"))
+    androidTestImplementation(project(":core:model"))
+    // SimpleBitmapPhotoRenderer / ExportBitmapRenderer は suspend API → runBlocking 用。
+    androidTestImplementation(libs.kotlinx.coroutines.android)
 }

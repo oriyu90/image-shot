@@ -12,6 +12,9 @@ android {
 
     defaultConfig {
         minSdk = 36
+        // ライブラリ androidTest を単体実行（self-instrumenting）する標準 runner。
+        // benchmark モジュールのカスタム Stub runner とは無関係（:core:render 単独）。
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     compileOptions {
@@ -32,4 +35,6 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.androidx.exifinterface)
     testImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.ext.junit)
 }

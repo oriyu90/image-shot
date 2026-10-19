@@ -12,6 +12,8 @@ android {
 
     defaultConfig {
         minSdk = 36
+        // ライブラリ androidTest を単体実行する標準 runner（EditStore 実 Room 統合テスト用）。
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     compileOptions {
@@ -42,4 +44,8 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     testImplementation(libs.junit)
     testImplementation(kotlin("test"))
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    // EditStoreInstrumentedTest の runBlocking（suspend 契約）用。
+    androidTestImplementation(libs.kotlinx.coroutines.android)
 }
