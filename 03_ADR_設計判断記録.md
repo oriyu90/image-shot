@@ -208,6 +208,32 @@ ADRは「背景→判断→代替案→効果・代償→検証方法→再検�
 - **検証**: EditStoreTest に追加: 正本ID書込み（tone/color/wb）、未知種別の保持+集計+連続確定、RESERVED 種の保持、未対応 schemaVersion の保持+codec 失敗、旧 "param" エイリアス適用。M1 で `wb` の tint はレシピ保存・UI・イベント経路は有効だが、現行レンダラーは tint を未適用（既知の機能限界、ADR-014 により無通知にしない）。P4 反映（2026-10-18）: curve/hsl/geometry 実装済み化、payload 形状追記、新種別の保存→decode 往復・undo/redo・レンダリング適用は core:render/database の JVM テスト（計25件追加分を含め緑）と実機検証（回転90°→書き出し: 出力 900×1200・develop 適用確認）で機能。
 - **再検討条件**: payload 平均サイズの実測、kotlinx-serialization-cbor 安定版の継続実測、外部プリセット映射（§7）で保存フィールド数が実測的に拡大した場合。
 
+## ADR-023 — EXIF orientation は platform デコーダ（ImageDecoder）に一任する（MANUAL_APPLY の見送り）
+- **状態**: Accepted（実機実測で確定・2026-10-19）
+- **背景**: 06 棚卸し A1。`BitmapFactory` は EXIF orientation を適用せず、`orientation` は Asset に保存されるだけだった（縦位置撮影が横倒し表示/書き出し）。ライブラリグリッドは Coil が EXIF を自動補正するため、エディタとの一貫性も欠けていた。修正方針として「decode 直後に自前正規化（SourceOrientation: 1..8 のピクセル転置）」と「platform デコーダに一任」の2案があった（06 の判断待ち①）。
+- **判断**: **ImageDecoder（`setTargetColorSpace(sRGB)`・`ALLOCATOR_SHARED_MEMORY`・`setTargetSampleSize`）を両レンダラー共有のデコード正本（core:render `SourceDecode`）とし、EXIF orientation は platform 側適用に一任（`SourceDecodePolicy.PLATFORM_APPLIED`）**。自前正規化 `SourceOrientation`（純Kotlin・JVM テスト付き）は BitmapFactory フォールバック経路の退避手段として残す（その場合のみ適用し、二重適用をしない）。
+- **根拠（実測, TB710FU / API 36）**: `SourceDecode.decode` の raw 復号は orientation 5..8 で既に正立（寸法交換 64x48→48x64、corner 色が直立期待と±3以内= JPEG 圧縮劣化相当）。orientation 6/8 の probe ログ（`ExifProbe`）で判定。自前正規化を重畳させると二重回転で検出された（`ExifOrientationPipelineTest` 初回実行の失敗メッセージがその実測を提供）。
+- **検証**: `core:render` androidTest `ExifOrientationPipelineTest`（orientation 1..8・platform decode 直立契約）全 Pass、`PlatformExifBehaviorProbeTest`（観測のみ）、既存 JVM `SourceOrientationTest` はフォールバック経路として維持。実機 UI スモーク（既存レシピでの起動・エディタ描画・書き出し COMPLETE・原本 MD5 不変 `5daed919…`）。
+- **制限（明示）**: Android の ImageDecoder による EXIF 適用はプラットフォーム実装であり、極端な EXIF 値・破損ヘッダ・一部 HEIF での挙動は端末実装依存（端末実装依存の部分は `ExifInterface` で別途読み取り、警告文言に反映する）。`orientation` 不明（読取失敗）は正規化せず、warning `"source EXIF orientation unreadable: not normalized"` を出す（不明は不明のまま）。
+- **再検討条件**: ImageDecoder の EXIF 適用が実機で不一致を示した場合（`ExifOrientationPipelineTest` 失敗）、MANUAL_APPLY への flip（ワンライン）を再検討。BitmapFactory への退避経路はコード・テストを維持する。
+
+## ADR-024 — 色管理の第一段階: sRGB 作業空間への入力変換は platform デコーダ、JPEG 出力 ICC は platform エンコーダ（自前変換エンジンは見送り）
+- **状態**: Accepted（実機実測で確定・2026-10-19）
+- **背景**: 06 棚卸し A2/B1。入力 ICC（Display P3 等）を一切解析せず sRGB とみなす実装・無タグ JPEG 出力が警告のみで運用中。手段として Android 標準（ColorSpace/ICC 変換）と LittleCMS（NDK・サイズ増）があった（06 の判断待ち②）。NFR-04（プレビュー p95 100ms）との両立も制約。
+- **判断**:
+  1. **入力→作業空間変換**: `SourceDecode` が `ImageDecoder.setTargetColorSpace(SRGB)` を常に要求し、デコード後の `bitmap.colorSpace == SRGB` を実測ゲート（不一致なら「 conversion could not be verified; treated as sRGB」警告）。NDK/LittleCMS は不採用（プラットフォーム変換で足りる実測があれば追加依存を避ける）。
+  2. **JPEG 出力への ICC**: **Skia の JPEG エンコーダ（`Bitmap.compress`）は Bitmap の色空間に応じ既定で正規 ICC を APP2 埋め込む（実測: 456B・v4.4 mntr/RGB /XYZ ・D50 Bradford 適応色・para TRC）**。重複埋め込みは禁止（`JpegIcc.insertApp2IccProfile` は既存 ICC 検出時 null、`hasApp2IccProfile` を truthful な警告判定に使用）。自前生成の `MinimalSrgbIcc`（v4.3 行列+256項 curv 表・純Kotlin・アセット不使用）は platform 埋め込みが欠ける退避手段として保持し、実機解析可能性を検証済み（`JpegIccRoundTripDeviceTest`）。
+  3. **妥当性の定量化**: NFR-07 の golden ΔE ハーネス（`benchmark` androidTest・CIE ΔE76）を導入し、preview/export 同値契約を device 実測（結果は `benchmark/nfr_catalog.md` NFR-07）。P3→sRGB の経路一致（2経路同一値・広色域色で最大 ch 差 19 までの実効変換）は `P3DecodeRoundTripTest` で実測。
+- **引継ぎコメント**: 従来警告 `"input ICC / EXIF orientation not yet applied"` は上記の実装済み区分へ分割。Gainmap(HDR) は `HDR gainmap not processed; SDR tone only` として継続明示（未実装のまま）。
+- **代償**: 色変換精度はプラットフォーム実装に依存（複数端末の比較実測は未なし）。workingColorSpace の正本（ADR-005 Linear Rec.2020 float）は依然未実装で、現行は 8bit sRGB 暫定パイプライン（降格警告継続）。
+- **再検討条件**: 複数端末での ΔE 比較実測で platform 変換に疑義が出た場合、または HDR(CMS-HDR / Ultra HDR) 対応を開始する場合、LittleCMS/NDK と比較再検討。sRGB 非対応の奇異な ICC（例: CMYK）の検出は `colorSpaceConverted` ゲートの警告で保たれる（その場での転換期待はしない）。
+
+## ADR-025 — リリースで R8 / shrinkResources を有効化（benchmark 型は release と一致させる）
+- **状態**: Accepted（2026-10-19）
+- **背景**: 06 棚卸し F1。リリースが無圧縮で NFR-08 未測定。`benchmark` 型は計測の variant 差異を避けるため release と同一構成（02 §6 性能計測の制御）が求められていた。
+- **判断**: `release` と `benchmark` の双方に `isMinifyEnabled=true` / `isShrinkResources=true` / `proguard-android-optimize.txt` + 最小 keep（kotlinx.serialization canonical 分組を `com.imageshot.core.model.**` に限定）。R8 全モードの既定値（fullMode default true）を利用。手動 DI・リフレクションはなし、Room/WorkManager/Compose/Coroutines は AAR consumer rules に従う。
+- **検証**: `:app:assembleRelease` 成功（R8 実行・lintVitalRelease 含む）。リリース APK 3,004,509 B（3.0 MB）、AAB 3,954,663 B（3.77 MiB）— `nfr_catalog.md` NFR-08 の方法論注記に従う。**実機でのリリース版ランタイム確認は今各PRでは未実施**（debug 署名データとの共存で INSTALL_FAILED_UPDATE_INCOMPATIBLE、既存データの保全優先）→ 未検証として台帳に記載し、次回リリース検証 PR で端末スモーク・Keepルール顕在化の判別を行う（失敗時は `mapping.txt` 32.2MB から特定可能）。
+- **再検討条件**: リリース版の実機実行でシリアライズ/DB 崩壊（serializer 消去等）が出た場合、keep ルールを追加し R8 分析 Path C 結論に記録。AGP 9.3+ 移行時は `:app:analyzeReleaseR8Config` スタンドアロンタスクの定量 Path A 分析に切替。
 ## 変更管理
 
 1. ADRを更新する場合、元判断を消さず`Superseded by ADR-xxx`を記録する。

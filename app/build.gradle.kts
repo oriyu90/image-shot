@@ -42,20 +42,25 @@ android {
             isMinifyEnabled = false
         }
         release {
-            isMinifyEnabled = false // TODO(release): R8 は署名PRで有効化する
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
             if (storeFileProp != null && storeFileProp.isFile) {
                 signingConfig = signingConfigs.getByName("release")
             }
         }
         // P2: Macrobenchmark 用ビルド型（developer.android.com/macrobenchmark/setup の公式レシピ準拠）。
         // release を初期化し、library モジュールが benchmark 型を持たないため release にフォールバックさせる。
-        // isMinifyEnabled を release と同じ false に固定しているのは、R8 の有無による variant 差異を
-        // 計測結果に混入させないため（R8 有効化は署名PRで release/benchmark 同時に行う）。
+        // R8 有効化は release と同時に（R8 の有無による variant 差異を計測結果に混入させない）。
         create("benchmark") {
             initWith(getByName("release"))
             matchingFallbacks += listOf("release")
             isDebuggable = false
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             if (storeFileProp != null && storeFileProp.isFile) {
                 signingConfig = signingConfigs.getByName("release")
             }

@@ -58,7 +58,8 @@ fun ExportScreen(
             style = MaterialTheme.typography.labelSmall,
         )
         Text(
-            "※ 未対応（ADR-014）: EXIF/ICC 維持はパススルー未実装。RAW/TIFF 書き出しは非対応。" +
+            "※ 未対応（ADR-014）: EXIF pass-through 未実装（入力 EXIF は書き込まない。出力 ICC は " +
+                "platform エンコーダが付与: 2026-10-19 実機実測）。RAW/TIFF 書き出しは非対応。" +
                 "ジョブ設定正本はキャッシュ領域の request ファイルのため、キャッシュ消去で" +
                 "FAILED_PERMANENT になります（再設定が必要）。",
             style = MaterialTheme.typography.labelSmall,

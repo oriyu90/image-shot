@@ -29,9 +29,9 @@ echo "=== kill-injection loop: device=$DEVICE pkg=$PKG n=$N workdir=$WORK_DIR ==
 while [ "$it" -lt "$N" ]; do
   it=$((it + 1))
 
-  # 1) force-stop
+  # 1) force-stop（macOS BSD awk に systime 無しのため固定スリープに修正・2026-10-19）
   $ADB shell am force-stop "$PKG" 2>/dev/null
-  sleep $(awk -v s=0.5 -v e=1.5 'BEGIN{srand(int(systime())+'"$it"'); print s+rand()*(e-s)}')
+  sleep 0.8
 
   # 2) launch
   $ADB shell am start -n "$ACTIVITY" >/dev/null 2>&1
