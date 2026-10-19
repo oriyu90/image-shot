@@ -155,15 +155,19 @@ object SourceDecode {
     }.getOrDefault(0) // 読取失敗は「不明」（0）。恒等・警告対象。
 }
 
-/**
- * EXIF orientation の適用方針の切替正本。
- * - MANUAL_APPLY（既定）: 自前ピクセル転置（[SourceOrientation]）で正規化する。
- * - PLATFORM_APPLIED: ImageDecoder の自動適用に任せ、自前適用は行わない。
- * デバイス統合テスト（実機のみ）でどちらが実鳴りか検証した後、orchestrator が本定数を
- * flip/削除する前提の切替点。
- */
 enum class ExifStrategy { PLATFORM_APPLIED, MANUAL_APPLY }
 
+/**
+ * EXIF orientation の適用方針の正本。
+ *
+ * 【実機確定（2026-10-19, TB710FU / API 36）】ImageDecoder は content URI ソースの
+ * JPEG EXIF orientation を**自動適用する**。probe 測定では orientation 5..8 の
+ * raw decode が既に正立（寸法交換 48x64、corner color が直立期待と±3以内）を示した
+ * （core/render androidTest: PlatformExifBehaviorProbeTest / ExifOrientationPipelineTest）。
+ * よって正本は PLATFORM_APPLIED とし、自前正規化（[SourceOrientation]）を重畳させない
+ * （二重回転防止）。自前正規化のコードと JVM テストは BitmapFactory フォールバック経路
+ * （プラットフォーム適用が無い場合の退避手段）として保持する。
+ */
 object SourceDecodePolicy {
-    val exifStrategy: ExifStrategy = ExifStrategy.MANUAL_APPLY
+    val exifStrategy: ExifStrategy = ExifStrategy.PLATFORM_APPLIED
 }

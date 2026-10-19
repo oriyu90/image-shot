@@ -154,8 +154,12 @@ class ExportBitmapRenderer(context: Context) {
                 val extra = mutableListOf<String>()
                 val embedded = JpegIcc.insertApp2IccProfile(bytes, MinimalSrgbIcc.profileBytes())
                 if (embedded == null) {
-                    // 既に ICC APP2 がある / 構造破綻 → 二重付与せず、そのまま書き出して明示する。
-                    extra += "JPEG ICC embedding skipped: APP2 ICC profile already present or segment malformed"
+                    // 【実機確定】Skia の JPEG エンコーダは Bitmap の色空間（sRGB 等）に応じ
+                    // 既定で APP2 ICC を埋め込む。埋め込み済みは「sRGB タグ目的は達成済み」なので
+                    // 警告対象外。埋め込みが無く、かつ挿入も不能（構造破綻）の場合のみ明示警告。
+                    if (!JpegIcc.hasApp2IccProfile(bytes)) {
+                        extra += "JPEG ICC embedding skipped: no embedded ICC and APP2 insertion not possible (segment malformed)"
+                    }
                 } else {
                     bytes = embedded
                 }
@@ -209,7 +213,13 @@ class ExportBitmapRenderer(context: Context) {
         source.getPixels(pixels, 0, width, 0, 0, width, height)
         val plane0 = RecipeGeometry.PixPlane(pixels, width, height)
         // EXIF向きの正規化をユーザー自身のジオメトリの「前」に行う（合成順は決定的・正規化→ユーザー）。
-        val normalized = SourceOrientation.normalize(plane0, sourceOrientation)
+        // 【実機確定】PLATFORM_APPLIED（正本）では ImageDecoder が既に適用済みのため
+        // 自前転置を行わない（二重回転防止）。MANUAL 戦略（BitmapFactory フォールバック）時のみ適用。
+        val normalized = if (SourceDecodePolicy.exifStrategy == ExifStrategy.MANUAL_APPLY) {
+            SourceOrientation.normalize(plane0, sourceOrientation)
+        } else {
+            plane0
+        }
         val g = recipe.geometry
         val plane = RecipeGeometry.applyIfNeeded(
             normalized,
@@ -282,7 +292,7 @@ class ExportBitmapRenderer(context: Context) {
         decode.orientationAppliedByUs ->
             "EXIF orientation normalized (manual pixel transform, orientation=${decode.sourceOrientation})"
         SourceDecodePolicy.exifStrategy == ExifStrategy.PLATFORM_APPLIED ->
-            "EXIF orientation delegated to platform decoder (ImageDecoder; device verification pending), " +
+            "EXIF orientation delegated to platform decoder (ImageDecoder; device-verified 2026-10-19, TB710FU API36), " +
                 "orientation=${decode.sourceOrientation}"
         else -> "EXIF orientation 1 (normal): no orientation transform needed"
     }

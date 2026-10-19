@@ -62,6 +62,19 @@ class GoldenPreviewExportDeltaETest {
     }
 
     @Test
+    fun goldenDeltaE_downsampledPreview_provisionalThresholds() {
+        // 実プレビューワークロード（ピラミッド sample=2・1024x683 → 書き出し寸法へ resample）。
+        runGoldenCase(
+            case = "downsampled-preview(540px-sample2)-non-neutral",
+            recipe = goldenRecipe(),
+            requestedPx = 540,
+            meanMax = PROVISIONAL_MEAN_MAX,
+            p95Max = PROVISIONAL_P95_MAX,
+            provisional = true,
+        )
+    }
+
+    @Test
     fun goldenDeltaE_neutralRecipe_identityContract() {
         // 実契約: 全パラメータ中立 → プレビューと書き出しは恒等（JPEG 再圧縮の丸め差のみ残す）。
         runGoldenCase(
@@ -78,6 +91,7 @@ class GoldenPreviewExportDeltaETest {
     private fun runGoldenCase(
         case: String,
         recipe: EditRecipe,
+        requestedPx: Int = 1080,
         meanMax: Double,
         p95Max: Double?,
         provisional: Boolean,
@@ -92,7 +106,7 @@ class GoldenPreviewExportDeltaETest {
             documentId = "golden-deltae",
             revision = 1L,
             viewRect = RenderRequest.Rect(0.0, 0.0, 1.0, 1.0),
-            requestedPx = 1080,
+            requestedPx = requestedPx,
             targetSpace = "srgb-d65",
             quality = RenderRequest.Quality.PREVIEW,
             generationId = 1L,

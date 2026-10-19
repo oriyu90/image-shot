@@ -8,28 +8,25 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * EXIF orientation 1..8 の共有デコード→手動正規化パイプラインの device テスト。
+ * EXIF orientation 1..8 の共有デコード→正立確認の device テスト。
  *
- * 経路（レンダラー実装と同一）:
- *   合成 JPEG に対象 orientation タグを付与 → [SourceDecode.decode]（共有デコードパス・sample=1）
- *   → getPixels → [SourceOrientation.normalize] → 期待直立パターンとの照合。
+ * 【実測確定（2026-10-19, TB710FU / API 36）】ImageDecoder は content URI ソースの
+ * JPEG EXIF orientation を**自動適用する**（PlatformExifBehaviorProbeTest の probe 測定:
+ * orientation 5..8 の raw decode が既に正立・寸法交換 48x64・corner 色が直立期待と±3以内）。
+ * よって正本は [SourceDecodePolicy.PLATFORM_APPLIED] であり、本テストの契約は:
+ *   合成 JPEG に対象 orientation タグを付与 → [SourceDecode.decode]（sample=1）
+ *   → raw decode が「保存グリッドを [SourceOrientation.normalize] した直立パターン」と一致
+ * （自前転置は PLATFORM 戦略では行わない。二重適用は orientationAppliedByUs=false の契約で担保）。
  *
- * 【本テストが計測すること（緩和禁止・計測値の正本）】
- * - 正本は [SourceDecodePolicy.MANUAL_APPLY]（既定戦略）: デコード自体は orientation を
- *   適用せず、自前のちょうど1回の正規化で直立させる。
- * - もし実機の ImageDecoder が URI ソースで EXIF orientation を自動適用する場合、
- *   本テストは二重正規化（正規化2回相当）により失敗する。これは欠陥ではなく
- *   "実測された確認事項" であり、その場合は SourceDecodePolicy の flip と本テストの
- *   更新を orchestrator が行う。失敗メッセージは expected/actual の角四隅色・orientation・
- *   実寸を出す（PlatformExifBehaviorProbeTest の実測ログと突き合わせる）。
- * - 寸法契約: orientation 5..8 は正規化後 w/h が交換される（転置）。
+ * 寸法契約: orientation 5..8 は decode 後 w/h が交換（転置）。1..4 は不変。
+ * JPEG 圧縮劣化は [TestImageFactory.classify] による近傍色分類で許容する。
  */
 class ExifOrientationPipelineTest {
 
     private val context: Context = InstrumentationRegistry.getInstrumentation().targetContext
 
     @Test
-    fun exifOrientations1to8_manualNormalize_restoresUprightComponentOrder() {
+    fun exifOrientations1to8_platformDecodeIsAlreadyUpright() {
         val failures = StringBuilder()
         for (orientation in 1..8) {
             val source = TestImageFactory.createAsymmetricBitmap()
@@ -40,7 +37,7 @@ class ExifOrientationPipelineTest {
             }
         }
         assertTrue(
-            "EXIF orientation 1..8 の手動正規化で直立一致しない（正本契約との不整合 / measurement 実測）:\n$failures",
+            "EXIF orientation 1..8 の platform decode が直立一致しない（PLATFORM_APPLIED 契約との不整合）:\n$failures",
             failures.isEmpty(),
         )
     }
@@ -66,8 +63,7 @@ class ExifOrientationPipelineTest {
 
         val raw = decoded.bitmap
         try {
-            // 期待直立平面: 本テスト側で合成パターン → 同一の変換を適用した期待値
-            // （「パターン生成 ⇔ 照合」の間で期待値を重複定義しない）。
+            // 期待直立平面: 保存グリッド → SourceOrientation.normalize した結果（正典）。
             val expectedUpright = SourceOrientation.normalize(
                 RecipeGeometry.PixPlane(
                     IntArray(TestImageFactory.WIDTH * TestImageFactory.HEIGHT) { i ->
@@ -78,22 +74,20 @@ class ExifOrientationPipelineTest {
                 ),
                 orientation,
             )
-            // 対象は decoded 実画素（planeOf = getPixels 経路・レンダラーと同一方式）。
+            // 対象は raw decode 実画素（platform が既に適用済みのため自前正規化はしない）。
             val rawPlane = TestImageFactory.planeOf(raw)
-            val actualUpright = SourceOrientation.normalize(rawPlane, orientation)
 
             var local = ""
 
-            // ---- 寸法契約: 5..8 は転置で w/h 交換。----
-            if (actualUpright.width != expectedUpright.width || actualUpright.height != expectedUpright.height) {
-                local += "o=$orientation: 正規化後寸法不一致 expected=${expectedUpright.width}x${expectedUpright.height} " +
-                    "actual=${actualUpright.width}x${actualUpright.height} " +
-                    "(raw decoded=${raw.width}x${raw.height} usedFallback=${decoded.usedFallback})\n" +
-                    "  → ImageDecoder の EXIF 自動適用の疑い（二重正規化は転置して寸法が元に戻る）。\n"
+            // ---- 寸法契約: 5..8 は転置で w/h 交換。1..4 は保存寸法のまま。----
+            if (rawPlane.width != expectedUpright.width || rawPlane.height != expectedUpright.height) {
+                local += "o=$orientation: decode 後寸法不一致 expected=${expectedUpright.width}x${expectedUpright.height} " +
+                    "actual=${rawPlane.width}x${rawPlane.height} usedFallback=${decoded.usedFallback}\n" +
+                    "  → platform decode の orientation 適用と正典が一致しない（ImageDecoder 挙動の変化の疑い）。\n"
             }
 
-            // ---- 内容契約（パターン内部サンプルの正典色一致・hex 併記）。----
-            if (actualUpright.width == expectedUpright.width && actualUpright.height == expectedUpright.height) {
+            // ---- 内容契約（パターン内部サンプルの正典色分類一致・hex 併記）。----
+            if (rawPlane.width == expectedUpright.width && rawPlane.height == expectedUpright.height) {
                 val rows = StringBuilder()
                 var mismatchCount = 0
                 for ((x, y) in TestImageFactory.safeInteriorSamples(
@@ -101,7 +95,7 @@ class ExifOrientationPipelineTest {
                     expectedUpright.height,
                 ) { px, py -> expectedUpright.pixels[py * expectedUpright.width + px] }) {
                     val expected = expectedUpright.pixels[y * expectedUpright.width + x]
-                    val actual = actualUpright.pixels[y * actualUpright.width + x]
+                    val actual = rawPlane.pixels[y * rawPlane.width + x]
                     if (TestImageFactory.classify(expected) != TestImageFactory.classify(actual)) {
                         mismatchCount++
                         if (mismatchCount <= 6) {
@@ -114,31 +108,27 @@ class ExifOrientationPipelineTest {
                 }
                 if (mismatchCount > 0) {
                     local += "o=$orientation: 直立後の画素不一致 mismatchCount=$mismatchCount\n" +
-                        "  正本戦略=${SourceDecodePolicy.exifStrategy} orientationAppliedByUs=${decoded.orientationAppliedByUs} " +
+                        "  戦略=${SourceDecodePolicy.exifStrategy} orientationAppliedByUs=${decoded.orientationAppliedByUs} " +
                         "sourceOrientation=${decoded.sourceOrientation} usedFallback=${decoded.usedFallback}\n" +
                         "  raw decoded=${raw.width}x${raw.height} rawTL=${TestImageFactory.hex(rawPlane.pixels[0])} " +
                         "rawTR=${TestImageFactory.hex(rawPlane.pixels[rawPlane.width - 1])}\n" +
-                        "  正規化後 TL expected=${TestImageFactory.classifyLabel(expectedUpright.pixels[0])} " +
-                        "actual=${TestImageFactory.classifyLabel(actualUpright.pixels[0])}\n" +
-                        "  正規化後 TR expected=${TestImageFactory.classifyLabel(expectedUpright.pixels[expectedUpright.width - 1])} " +
-                        "actual=${TestImageFactory.classifyLabel(actualUpright.pixels[actualUpright.width - 1])}\n" +
+                        "  expected TL=${TestImageFactory.classifyLabel(expectedUpright.pixels[0])} " +
+                        "TR=${TestImageFactory.classifyLabel(expectedUpright.pixels[expectedUpright.width - 1])}\n" +
                         rows +
-                        "  → ImageDecoder が EXIF orientation を自動適用している可能性（二重正規化）。" +
-                        "SourceDecodePolicy の実機検証と PlatformExifBehaviorProbeTest のログ参照。\n"
+                        "  → ImageDecoder の EXIF 適用結果と正典の不一致（orientation 判定・適用方向の再検証）。\n"
                 }
             }
 
-            // ---- EXIF 読取契約（SourceDecode が対象値を読む・正規化フラグが MANUAL と整合）。----
+            // ---- EXIF 読取契約（SourceDecode が対象値を読む）＋ 戦略整合契約。----
             assertEquals(
                 "orientation=$orientation: SourceDecode の EXIF 読取が不一致 sourceOrientation=${decoded.sourceOrientation}",
                 orientation,
                 decoded.sourceOrientation,
             )
-            if (orientation >= 2) {
+            if (orientation >= 2 && SourceDecodePolicy.exifStrategy == ExifStrategy.PLATFORM_APPLIED) {
                 assertTrue(
-                    "orientation=$orientation: 手動正規化が実行されていない（orientationAppliedByUs=false）。" +
-                        "正本戦略=${SourceDecodePolicy.exifStrategy}",
-                    decoded.orientationAppliedByUs,
+                    "orientation=$orientation: PLATFORM_APPLIED 既定なのに自前正規化が実行された（orientationAppliedByUs=true・二重適用の疑い）",
+                    !decoded.orientationAppliedByUs,
                 )
             }
             failures.append(local)

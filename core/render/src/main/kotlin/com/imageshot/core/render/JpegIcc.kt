@@ -288,6 +288,36 @@ object JpegIcc {
         return out
     }
 
+    /**
+     * 既に APP2 "ICC_PROFILE\0" セグメントを含むか（Skia の JPEG エンコーダは sRGB/P3 の
+     * Bitmap に対し既定で ICC を埋め込むため、埋め込み済みは「目的達成済み」として警告
+     * 対象外とする判定に使用する。構造破綻時は false を返す）。
+     */
+    fun hasApp2IccProfile(jpeg: ByteArray): Boolean {
+        if (jpeg.size < 2 || jpeg[0] != 0xFF.toByte() || jpeg[1] != 0xD8.toByte()) return false
+        var i = 2
+        while (i < jpeg.size) {
+            if (jpeg[i] != 0xFF.toByte()) return false
+            while (i < jpeg.size && jpeg[i] == 0xFF.toByte()) i++
+            if (i >= jpeg.size) return false
+            val marker = jpeg[i].toInt() and 0xFF
+            if (marker == 0x00 || marker == 0xFF) return false
+            if (marker == 0xD9 || marker == 0xDA) return false // EOI/SOS 到達までに無ければ false
+            if (marker == 0x01 || marker in 0xD0..0xD7) {
+                i += 1
+            } else {
+                if (i + 3 > jpeg.size) return false
+                val len = ((jpeg[i + 1].toInt() and 0xFF) shl 8) or (jpeg[i + 2].toInt() and 0xFF)
+                if (len < 2) return false
+                val segEnd = i + 1 + len
+                if (segEnd > jpeg.size) return false
+                if (marker in 0xE0..0xEF && startsWithIccHeader(jpeg, i + 3)) return true
+                i = segEnd
+            }
+        }
+        return false
+    }
+
     /** 長さフィールド直後の位置（at）から "ICC_PROFILE\0" が続くか判定。 */
     private fun startsWithIccHeader(jpeg: ByteArray, at: Int): Boolean {
         if (at + ICC_HEADER.size > jpeg.size) return false

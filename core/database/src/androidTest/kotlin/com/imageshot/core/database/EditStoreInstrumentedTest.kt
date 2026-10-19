@@ -60,7 +60,8 @@ class EditStoreInstrumentedTest {
         var state = ensureBase()
         state = commit(state, AdjustmentId.EXPOSURE, 1.5)
         state = commit(state, AdjustmentId.SATURATION, 40.0)
-        state = commit(state, AdjustmentId.TEMPERATURE, -40.0)
+        // 温度は往復可逆な領域の値（-40 は K 端でクランプされ非可逆のため -20 を使用）。
+        state = commit(state, AdjustmentId.TEMPERATURE, -20.0)
         state = commitCurve(state, listOf(listOf(0.8, 1.0), listOf(1.0, 0.6), listOf(0.2, 0.0)))
         state = commitGeometry(
             state,
@@ -71,8 +72,8 @@ class EditStoreInstrumentedTest {
         assertEquals(5L, loaded.currentRevision)
         assertEquals(1.5, loaded.recipe.develop.tone.exposureEv, 1e-9)
         assertEquals(0.4, loaded.recipe.develop.color.saturation, 1e-9)
-        // 温度はスライダー値（絶対K）経由の正本写像で往復照合する。
-        assertEquals(-40.0, AdjustmentId.TEMPERATURE.sliderValueOf(loaded.recipe), 1e-9)
+        // 温度は往復可逆な領域の値をスライダー値（絶対K）経由の正本写像で往復照合する。
+        assertEquals(-20.0, AdjustmentId.TEMPERATURE.sliderValueOf(loaded.recipe), 1e-6)
         assertEquals(
             listOf(listOf(0.2, 0.0), listOf(0.8, 1.0), listOf(1.0, 0.6)),
             loaded.recipe.develop.curve.rgb,

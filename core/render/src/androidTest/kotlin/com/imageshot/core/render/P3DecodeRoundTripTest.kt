@@ -17,13 +17,14 @@ import org.junit.Test
  *
  * 【明示・正直性】本テストは P3→sRGB 変換の実行確認であり、広色域色の数学的正確性の
  * 定量保証ではない（ΔE 定量は benchmark の golden ΔE ハーネスで行う）。
- * 検証は実測の2本立てのみで行い、「期待値の断定」をしない:
- *   実測1）[SourceDecode.Result.colorSpaceConverted]（bitmap.colorSpace が sRGB と一致した
+ * 検証は**実測確定（2026-10-19, TB710FU API36）**の契約で行う:
+ *   契約1）[SourceDecode.Result.colorSpaceConverted]（bitmap.colorSpace が sRGB と一致した
  *         場合のみ true になる、SourceDecode の自前実測ゲート）。
- *   実測2）単純 BitmapFactory 復号（入力 ICC に従う既定経路・比較基準の identity 側）との
- *         画素差分: 差分が非自明（≥ [NONTRIVIAL_DELTA]）なら「変換が画素を実質変更した」証拠。
- *         もし全サンプルの差分が自明なら、復号値が元整数 ±[ROUNDING_TOLERANCE] 以内に収まる
- *         （恒等丸め契約）ことを要求する。
+ *   契約2）**経路一貫性**: ImageDecoder(setTargetColorSpace=sRGB) 復号と単純 BitmapFactory
+ *         （入力 ICC に従う既定経路）の画素が ±[ROUNDING_TOLERANCE] 以内で一致する
+ *         （実測 maxConvIdent=0: 両経路が同値で変換する＝setPixels に書いた int を
+ *         bitmap 色空間のエンコード値として扱うため元整数との恒等契約は原理的に不成立。
+ *         P3 エンコード値の広色域色は sRGB への実質変換を行う（実測 dConvOrig 最大 19））。
  */
 class P3DecodeRoundTripTest {
 
@@ -124,21 +125,25 @@ class P3DecodeRoundTripTest {
             )
 
             if (maxConvIdentity > NONTRIVIAL_DELTA) {
-                // sRGB 変換が画素を実質変更した実測（identity 側との差分が非自明）。
                 Log.i(
                     "P3Probe",
                     "P3→sRGB 変換が画素を実質変更した実測あり（maxConvIdent=$maxConvIdentity > $NONTRIVIAL_DELTA）。" +
                         "数学的正確性の定量は golden ΔE ハーネスの対象。",
                 )
-            } else {
-                // 差分が自明な場合の恒等丸め契約: 復号値が元整数 ±2 以内かつ色空間 sRGB（上で実測済）。
-                val over = SAMPLE_COORDS.mapIndexedNotNull { index, (cx, cy) ->
-                    val delta = maxChannelDelta(convertedPlane.pixels[cy * convertedPlane.width + cx], PATTERN_COLORS[index])
-                    if (delta > ROUNDING_TOLERANCE) "patch=${PATCH_NAMES[index]} delta=$delta" else null
-                }
-                assertTrue(
-                    "変換差分が自明なのに恒等契約（±$ROUNDING_TOLERANCE）を満たさない: $over",
-                    over.isEmpty(),
+            }
+            // ---- 契約2（実測確定版）: 経路一貫性 ----
+            // setPixels の int は bitmap 色空間（P3）のエンコード値として書かれるため、
+            // 「元整数との恒等」は契約にしない。両デコード経路の同値性のみを要求する。
+            assertTrue(
+                "ImageDecoder(sRGBターゲット) と BitmapFactory(既定) の復号が不一致" +
+                    "（pipeline 一貫性契約違反）: maxConvIdent=$maxConvIdentity > $ROUNDING_TOLERANCE\n$probes",
+                maxConvIdentity <= ROUNDING_TOLERANCE,
+            )
+            if (maxConvOriginal > NONTRIVIAL_DELTA) {
+                Log.i(
+                    "P3Probe",
+                    "広色域色での原値差非自明（maxConvOrig=$maxConvOriginal > $NONTRIVIAL_DELTA）＝" +
+                        "P3→sRGB 変換が実効した実測。",
                 )
             }
         } finally {

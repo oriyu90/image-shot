@@ -180,10 +180,16 @@ class SimpleBitmapPhotoRenderer(
         source.getPixels(pixels, 0, width, 0, 0, width, height)
 
         // EXIF向きの正規化をユーザー自身のジオメトリの「前」に行う（合成順は決定的）。
-        val normalized = SourceOrientation.normalize(
-            RecipeGeometry.PixPlane(pixels, width, height),
-            sourceOrientation,
-        )
+        // 【実機確定】PLATFORM_APPLIED（正本）では ImageDecoder が既に適用済みのため
+        // 自前転置を行わない（二重回転防止）。MANUAL 戦略（BitmapFactory フォールバック）時のみ適用。
+        val normalized = if (SourceDecodePolicy.exifStrategy == ExifStrategy.MANUAL_APPLY) {
+            SourceOrientation.normalize(
+                RecipeGeometry.PixPlane(pixels, width, height),
+                sourceOrientation,
+            )
+        } else {
+            RecipeGeometry.PixPlane(pixels, width, height)
+        }
         val g = recipe.geometry
         val plane = RecipeGeometry.applyIfNeeded(
             normalized,
@@ -236,7 +242,7 @@ class SimpleBitmapPhotoRenderer(
                     decode.orientationAppliedByUs ->
                         "EXIF orientation normalized (manual pixel transform, orientation=${decode.sourceOrientation})"
                     SourceDecodePolicy.exifStrategy == ExifStrategy.PLATFORM_APPLIED ->
-                        "EXIF orientation delegated to platform decoder (ImageDecoder; device verification pending), " +
+                        "EXIF orientation delegated to platform decoder (ImageDecoder; device-verified 2026-10-19, TB710FU API36), " +
                             "orientation=${decode.sourceOrientation}"
                     else -> "EXIF orientation 1 (normal): no orientation transform needed"
                 }
