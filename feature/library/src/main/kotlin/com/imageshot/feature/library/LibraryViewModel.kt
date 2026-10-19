@@ -11,12 +11,17 @@ import com.imageshot.core.model.ImageOpResult
 import com.imageshot.core.model.ImportPolicy
 import com.imageshot.core.model.ImportProbe
 import com.imageshot.core.storage.ImportRepository
+import com.imageshot.core.storage.ThumbnailGenerator
+import com.imageshot.core.storage.ThumbnailSeed
 import com.imageshot.core.storage.UriAccessibility
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
@@ -28,10 +33,15 @@ import kotlinx.coroutines.launch
  * - DB（Room WAL）を正本に、UI状態は単一の state flow から派生させる（02_実装定義書.md §10）。
  * - 取り込み中は明示的な状態表示とし、失敗・部分対応を黙って成功扱いにしない（ADR-014）。
  * - sha-256 ファンガープリントは遅延実行（U01）で、登録応答を待たせない。
+ * - サムネイル（PR-8）は遅延生成: 表示中の資産のうち thumbnails 行が無いものだけに
+ *   [ThumbnailGenerator.ensureForAsset] を指示する（既存行は再生成しない＝2巡目は0デコード）。
+ *   生成の成否でセルの model が変わるが、表示性能・画質の実測（NFR-10）は未測定。
  */
 class LibraryViewModel(
     private val assetDao: AssetDao,
     private val importRepository: ImportRepository,
+    /** サムネイル生成パイプライン（PR-8）。生成はこの VM スコープの単一ジョブからのみ駆動する。 */
+    private val thumbnails: ThumbnailGenerator,
 ) : ViewModel() {
 
     /** ローカル検索・ソートのMVP範囲（撮影日順/表示名順のみ。M2: メタデータ検索）。 */
@@ -58,6 +68,12 @@ class LibraryViewModel(
         val searchQuery: String = "",
         val sortOrder: AssetSortOrder = AssetSortOrder.DATE_TAKEN_DESC,
         val sweepingAvailability: Boolean = false,
+        /**
+         * 資産ID → サムネイルファイル絶対パス（PR-8）。
+         * 行なし/実体欠落の asset は null または不在＝セル表示は従来どおりソースURI
+         * （全量デコード相当）へフォールバックする。生成・表示性能は実機未測定（NFR-10）。
+         */
+        val thumbnailPaths: Map<String, String?> = emptyMap(),
     )
 
     private val importing = MutableStateFlow(false)
@@ -66,6 +82,12 @@ class LibraryViewModel(
     private val sortOrder = MutableStateFlow(AssetSortOrder.DATE_TAKEN_DESC)
     private val searchQuery = MutableStateFlow("")
     private val sweeping = MutableStateFlow(false)
+
+    /** 資産ID → 表示に使えるサムネイル絶対パス（行正本: 値 null は実体欠落を含むフォールバック）。 */
+    private val thumbnailPaths = MutableStateFlow<Map<String, String?>>(emptyMap())
+
+    /** ライブラリ可視化を起点とする単一の有限ジョブ（複数回の指示はここへ収斂させる）。 */
+    private var thumbnailEnsureJob: Job? = null
 
     /** ソート/検索（表示名・撮影日）に沿った asset flow。Room DAO で完結させる。 */
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -80,29 +102,75 @@ class LibraryViewModel(
 
     @OptIn(ExperimentalCoroutinesApi::class)
     val state: StateFlow<UiState> = combine(
-        combine(sortOrder, searchQuery, sweeping) { order, query, isSweeping ->
-            Triple(order, query, isSweeping)
+        combine(
+            combine(sortOrder, searchQuery, sweeping) { order, query, isSweeping ->
+                Triple(order, query, isSweeping)
+            },
+            observedAssets,
+            importing.asStateFlow(),
+            batch.asStateFlow(),
+            messages.asStateFlow(),
+        ) { meta, assets, isImporting, batchProgress, msgs ->
+            UiState(
+                assets = assets,
+                importing = isImporting,
+                importBatchDone = batchProgress.first,
+                importBatchTotal = batchProgress.second,
+                messages = msgs,
+                searchQuery = meta.second,
+                sortOrder = meta.first,
+                sweepingAvailability = meta.third,
+            )
         },
-        observedAssets,
-        importing.asStateFlow(),
-        batch.asStateFlow(),
-        messages.asStateFlow(),
-    ) { meta, assets, isImporting, batchProgress, msgs ->
-        UiState(
-            assets = assets,
-            importing = isImporting,
-            importBatchDone = batchProgress.first,
-            importBatchTotal = batchProgress.second,
-            messages = msgs,
-            searchQuery = meta.second,
-            sortOrder = meta.first,
-            sweepingAvailability = meta.third,
-        )
+        thumbnailPaths.asStateFlow(),
+    ) { base, paths ->
+        // サムネイルは派生状態（生成ジョブが書く）。基底 UiState への差し込みはここでのみ行う。
+        base.copy(thumbnailPaths = paths)
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000),
         initialValue = UiState(),
     )
+
+    init {
+        // ライブラリ可視化と同一のトリガ（画面からの再指示は冪等で収斂する）。
+        onLibraryVisible()
+    }
+
+    /**
+     * ライブラリ可視化トリガ（PR-8）。ViewModel スコープ内の単一 bounded ジョブだけを持ち、
+     * 資産リストの各変化で「thumbnails 行が無い asset」にのみ生成を指示する
+     * （既存行は再生成しない。2巡目はスキップのみ）。onCleared での明示取消は不要
+     * （viewModelScope の解体に従う。取消の保証をこのクラスの外へ出さない）。
+     */
+    fun onLibraryVisible() {
+        if (thumbnailEnsureJob?.isActive == true) return
+        thumbnailEnsureJob = viewModelScope.launch(Dispatchers.Default) {
+            observedAssets.collect { assets ->
+                val next = HashMap<String, String?>(assets.size)
+                val pending = ArrayList<ThumbnailSeed>(assets.size)
+                for (asset in assets) {
+                    if (thumbnails.hasRows(asset.id)) {
+                        // 行が正本（PR-8 契約）: ファイル実在まで見た表示パスを反映（欠落は null）。
+                        next[asset.id] = thumbnails.bestDisplayPath(asset.id)
+                    } else {
+                        pending += ThumbnailSeed(
+                            assetId = asset.id,
+                            sourceUri = asset.sourceUri,
+                            displayName = asset.displayName,
+                        )
+                    }
+                }
+                thumbnailPaths.value = next
+                if (pending.isEmpty()) return@collect
+                // 生成は generator 内の Semaphore(2) でバウンド。完了ごとに当該 asset のみ反映。
+                thumbnails.ensureForAssets(pending) { assetId, ok ->
+                    thumbnailPaths.value = thumbnailPaths.value +
+                        (assetId to if (ok) thumbnails.bestDisplayPath(assetId) else null)
+                }
+            }
+        }
+    }
 
     /** 取り込み前の対応判定（U01: 非対応は明示）。ネットワークアクセスなし。 */
     suspend fun inspect(uri: String): ImportProbe? =

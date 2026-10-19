@@ -44,6 +44,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.imageshot.core.model.Asset
+import java.io.File
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -52,7 +53,8 @@ import kotlinx.coroutines.launch
 /**
  * ライブラリ画面（U01 + §4.1 ライブラリのM1最小構成）。
  * - 先頭のインポート操作群: Photo Picker（複数選択）、SAF ファイル複数、SAF フォルダー。
- * - 時系列グリッド（Coil 3.x でサムネレベル1枚のみ。ピラミッド段階生成はThumbnailDao統合で後続）。
+ * - 時系列グリッド（Coil 3.x。セルの model は ViewModel が持つサムネイル行（PR-8 で遅延生成）
+ *   の絶対パスが在ればそれを、無ければこれまでどおりソースURIを使う。挙動の実測は未測定）。
  * - 表示項目: 日時・判明するメタデータ（sniff形式・寸法・MediaStore簡易参照の撮影日）。
  * - URI失効検出（可用性再検査）→ 切断/失効状態表示 → 再関連付け導線ボタン。
  * - 写真の内容を外部送信しない。INTERNET権限は使用しない（CoilはローカルURIのみ対象）。
@@ -107,7 +109,9 @@ fun LibraryScreen(
     }
 
     // 入室時に1回、URI可用性を検査（失効/切断はセルに切断状態表示）。回転等で再実行しない。
+    // サムネイル生成（PR-8）の可視化トリガも同じ順序で入れる（ViewModel内で単一ジョブに収斂・冪等）。
     LaunchedEffect(Unit) {
+        viewModel.onLibraryVisible()
         viewModel.refreshAvailability()
         viewModel.backfillPendingFingerprints()
     }
@@ -157,6 +161,7 @@ fun LibraryScreen(
             items(state.assets, key = { it.id }) { asset ->
                 AssetCell(
                     asset = asset,
+                    thumbnailPath = state.thumbnailPaths[asset.id],
                     onOpen = { onOpenAsset(asset) },
                     onRelink = {
                         relinkTarget = asset
@@ -236,7 +241,12 @@ private fun SearchSortBar(
 }
 
 @Composable
-private fun AssetCell(asset: Asset, onOpen: () -> Unit, onRelink: () -> Unit) {
+private fun AssetCell(
+    asset: Asset,
+    thumbnailPath: String?,
+    onOpen: () -> Unit,
+    onRelink: () -> Unit,
+) {
     val disconnected = asset.availability == Asset.AVAILABILITY_REVOKED ||
         asset.availability == Asset.AVAILABILITY_DISCONNECTED
     val dateMs = asset.dateTaken ?: asset.importedAt
@@ -255,9 +265,11 @@ private fun AssetCell(asset: Asset, onOpen: () -> Unit, onRelink: () -> Unit) {
                 .padding(2.dp),
             contentAlignment = Alignment.Center,
         ) {
-            // ローカル URI のみを読み込み。失効URIはCoil側でエラー表示になる（黙って成功しない）。
+            // model 選択のみの変更（PR-8）: サムネイル行の実体ファイルがあればそれを、
+            // 無ければこれまでどおりソースURI（全量デコード相当）。
+            // ローカルのみを読む（失効URIはCoil側でエラー表示になる。黙って成功しない）。
             AsyncImage(
-                model = asset.sourceUri,
+                model = thumbnailPath?.let { File(it) } ?: asset.sourceUri,
                 contentDescription = if (disconnected) {
                     "${asset.displayName}（切断: 再関連付けが必要）"
                 } else {

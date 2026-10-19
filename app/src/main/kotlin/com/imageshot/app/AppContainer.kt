@@ -15,6 +15,7 @@ import com.imageshot.core.render.RenderBitmapStore
 import com.imageshot.core.render.SimpleBitmapPhotoRenderer
 import com.imageshot.core.storage.ContentUriImportRepository
 import com.imageshot.core.storage.ImportRepository
+import com.imageshot.core.storage.ThumbnailGenerator
 import com.imageshot.feature.export.ExportJobRepository
 import com.imageshot.feature.export.ExportWorkerDeps
 import com.imageshot.feature.export.WorkManagerExportJobScheduler
@@ -56,6 +57,14 @@ class AppContainer(context: Context) {
 
     /** フル解像度の書き出しレンダラー（ExportRenderer.kt・core/render 新規担当ファイル）。 */
     val exportRenderer: ExportBitmapRenderer = ExportBitmapRenderer(context)
+
+    /**
+     * ライブラリ表示用サムネイルの遅延生成（PR-8）。filesDir/thumbnails 配下に書き出す。
+     * ここではインスタンス化のみで自動生成は行わない（生成はライブラリ表示時に
+     * LibraryViewModel が行が無い資産にのみ指示する）。
+     */
+    val thumbnailGenerator: ThumbnailGenerator =
+        ThumbnailGenerator(context, database.thumbnailDao())
 
     /** 書き出しジョブ（ADR-010 二段階コミット）。staging は内部 cache 領域のみ。 */
     val exportJobRepository: ExportJobRepository =

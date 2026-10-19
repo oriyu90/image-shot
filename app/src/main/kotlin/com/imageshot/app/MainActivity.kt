@@ -46,7 +46,13 @@ class MainActivity : ComponentActivity() {
                 NavHost(navController = navController, startDestination = "library") {
                     composable("library") {
                         val vm: LibraryViewModel =
-                            viewModel { LibraryViewModel(container.assetDao, container.importRepository) }
+                            viewModel {
+                                LibraryViewModel(
+                                    assetDao = container.assetDao,
+                                    importRepository = container.importRepository,
+                                    thumbnails = container.thumbnailGenerator,
+                                )
+                            }
                         LibraryScreen(
                             viewModel = vm,
                             onOpenAsset = { asset ->
