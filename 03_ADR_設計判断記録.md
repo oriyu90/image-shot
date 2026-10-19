@@ -232,7 +232,7 @@ ADRは「背景→判断→代替案→効果・代償→検証方法→再検�
 - **状態**: Accepted（2026-10-19）
 - **背景**: 06 棚卸し F1。リリースが無圧縮で NFR-08 未測定。`benchmark` 型は計測の variant 差異を避けるため release と同一構成（02 §6 性能計測の制御）が求められていた。
 - **判断**: `release` と `benchmark` の双方に `isMinifyEnabled=true` / `isShrinkResources=true` / `proguard-android-optimize.txt` + 最小 keep（kotlinx.serialization canonical 分組を `com.imageshot.core.model.**` に限定）。R8 全モードの既定値（fullMode default true）を利用。手動 DI・リフレクションはなし、Room/WorkManager/Compose/Coroutines は AAR consumer rules に従う。
-- **検証**: `:app:assembleRelease` 成功（R8 実行・lintVitalRelease 含む）。リリース APK 3,004,509 B（3.0 MB）、AAB 3,954,663 B（3.77 MiB）— `nfr_catalog.md` NFR-08 の方法論注記に従う。**実機でのリリース版ランタイム確認は今各PRでは未実施**（debug 署名データとの共存で INSTALL_FAILED_UPDATE_INCOMPATIBLE、既存データの保全優先）→ 未検証として台帳に記載し、次回リリース検証 PR で端末スモーク・Keepルール顕在化の判別を行う（失敗時は `mapping.txt` 32.2MB から特定可能）。
+- **検証**: `:app:assembleRelease` 成功（R8 実行・lintVitalRelease 含む）。リリース APK 3,004,509 B（3.0 MB）、AAB 3,954,663 B（3.77 MiB）— `nfr_catalog.md` NFR-08 の方法論注記に従う。**実機でのリリース版ランタイム確認: 2026-10-19 に実施・全確認点 緑**（uninstall → release install → 起動・空ライブラリ描画 → SAF 取り込み → エディタ描画（改訂 r0 生成・Room 書込み+serialization）→ UI 書き出し COMPLETE（出力 135,420B・APP2 ICC 1/1 470B）→ 原本 MD5 `5daed919…` 不変）。失敗再現時は `mapping.txt` 32.2MB から特定可能。
 - **再検討条件**: リリース版の実機実行でシリアライズ/DB 崩壊（serializer 消去等）が出た場合、keep ルールを追加し R8 分析 Path C 結論に記録。AGP 9.3+ 移行時は `:app:analyzeReleaseR8Config` スタンドアロンタスクの定量 Path A 分析に切替。
 ## 変更管理
 
