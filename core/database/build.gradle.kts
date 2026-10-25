@@ -1,7 +1,7 @@
 // core:database — Room (SQLite)。DBは描画APIを知らない（02_実装定義書.md §2 依存方向）。
+// PR-21: kotlin-android → AGP 9 built-in Kotlin（jvmTarget は compileOptions 17 を継承）。
 plugins {
     alias(libs.plugins.android.library)
-    alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ksp)
 }
@@ -19,12 +19,6 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
-    }
-}
-
-kotlin {
-    compilerOptions {
-        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
 }
 

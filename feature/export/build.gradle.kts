@@ -1,7 +1,6 @@
 // feature:export — 書き出し画面 + ExportJob キュー + ExportWorker（§8.2 2段階コミット、ADR-010）
 plugins {
     alias(libs.plugins.android.library)
-    alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     // request: ExportJobRequest のファイル永続化に必要（既存バージョン正本から追加なし）
     alias(libs.plugins.kotlin.serialization)
@@ -22,12 +21,6 @@ android {
 
     buildFeatures {
         compose = true
-    }
-}
-
-kotlin {
-    compilerOptions {
-        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
 }
 

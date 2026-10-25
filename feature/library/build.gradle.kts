@@ -1,7 +1,6 @@
 // feature:library — 写真グリッド + PhotoPicker取り込み（01_製品仕様書.md §4.1, U01）
 plugins {
     alias(libs.plugins.android.library)
-    alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
 }
 
@@ -20,12 +19,6 @@ android {
 
     buildFeatures {
         compose = true
-    }
-}
-
-kotlin {
-    compilerOptions {
-        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
 }
 

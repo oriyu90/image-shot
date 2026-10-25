@@ -280,7 +280,7 @@ PR-30 (adaptive) — targetSdk 37 採用（判断待ち⑦）の直前に必須�
 | `Bitmap.compress` による gainmap 保全の可否 | 未検証（[文書] は基本操作言及のみ） | PR-22 spike |
 | TB710FU の HDR 撮影（RAW/PRO）対応 | 未確認 | PR-22/24 の fixture 調達時に実測 |
 | bundletool jar の要取得（ネットワーク） | 最新版番号は取得時に台帳化 | PR-17 |
-| AGP 9.4 への Kotlin/Compose バージョン随伴 | 影響は PR-21 実装時に特定 | PR-21 |
+| AGP 9.4 への Kotlin/Compose バージョン随伴 | **解決（2026-10-25・PR-21）**: built-in Kotlin は AGP 9.4.0 が Kotlin 2.2.10 を同梱し独立変更不可のため、KGP 由来プラグイン（jvm/serialization/compose）を 2.2.10 に統一。kotlin-android は適用禁止化・jvmTarget は compileOptions 既定継承で明示不要を公式確認済み（[文書] 2026-09-15 更新版） | 実装済み（gradle/libs.versions.toml コメントに根拠記載）。再検討は Kotlin 3.x 正本化（built-in Kotlin の移行先）時 |
 | Photo Picker クラウド URI の表示名挙動 | **部分観察（2026-10-25）**: ローカル経路は観察済み（com.google.android.photopicker・オフライン・数字 ID のみ → プレースホルダ `img-<hash8>.png` 正推論）。**クラウド経路は TB710FU（このアカウント）では Picker 上にクラウド項目が表示されず観察未達** — ネットワーク復帰後の再観察も同じ。挙動は端末/アカウント側の実装依存のため、本項は未解決のまま残置 | 完了済み PR は 06 §3.2 行に達成と明記していない（観察達成の一部のみ）。以後の端末/アカウント条件が揃った時に再観察（PR-19 の残置項目） |
 | push 対応（リモート不在 [実測]） | リモート不在 [実測] | 判断待ち⑧ |
 

@@ -1,8 +1,9 @@
 // app — applicationId com.imageshot.app。手動DI（AppContainer）+ Compose ナビゲーション。
 // 依存注入は Hilt を使わない（ADR: ビルドリスク低減のため AppContainer + ViewModel initializer）。
+// PR-21: kotlin-android は AGP 9 built-in Kotlin に統合（適用は禁止・jvmTarget 既定は
+// compileOptions.targetCompatibility=17 を継承するため明示ブロック不要）。
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
 }
 
@@ -74,12 +75,6 @@ android {
 
     buildFeatures {
         compose = true
-    }
-}
-
-kotlin {
-    compilerOptions {
-        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
 }
 

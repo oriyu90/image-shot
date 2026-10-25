@@ -5,10 +5,10 @@
 //   向きに依存がhyper細かく変わり実機で SQLiteDatabase 輸入崩壊を経験したため、手動方式に固定）。
 plugins {
     alias(libs.plugins.android.library)
-    alias(libs.plugins.kotlin.android)
     // 注: androidx.benchmark Gradle plugin は testInstrumentationRunner を plugin 既定
     // （androidx.benchmark.macro.junit4.MacrobenchmarkRunner — 同クラスが 1.4.1 生成物に存在せず
     //  実機で ClassNotFound を実証）に上書きするため適用しない。runner は自前 Stub を使用する。
+    // PR-21: kotlin-android → AGP 9 built-in Kotlin（jvmTarget は compileOptions 17 を継承）。
 }
 
 android {
@@ -37,12 +37,6 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
-    }
-}
-
-kotlin {
-    compilerOptions {
-        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
 }
 
