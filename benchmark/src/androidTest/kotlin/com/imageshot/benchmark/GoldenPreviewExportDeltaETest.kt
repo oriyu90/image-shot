@@ -33,44 +33,52 @@ import org.junit.Test
  *   → 書き出し: [ExportBitmapRenderer]（フル解像度・JPEG quality=95・maxEdgePx=null）
  *   → CIE ΔE76（sRGB int → 線形化 → XYZ D65 → Lab → 欧式距離）の全画素計量。
  *
- * 【暫定マイルストーン（first-run-baseline・nfr_catalog への確定は別PR）】
- * 非中立ケースの閾値 mean ΔE76 < 3.0 / p95 < 6.0 は**暫定**であり、検証済みの品質目標
- * ではない。初回実行の基線取り用。違反時は全指標を failure message に出す（計測用信号）。
- * 中立（全パラメータ既定）ケースの mean < 1.0 は実契約検査:
- * プレビューと書き出しは同一ノード実装（RecipeDevelopApplier 共有）であり、隠れた
- * 分岐（片側だけの追加劣化/色差）があればここで発覚する。こちらは緩和しない。
+ * 【しきい値固定（PR-18・2026-10-25）】
+ * 5 連続実行が全指標ビット完全一致（σ=0・同一 JSON ハッシュ）であり、2026-10-19 の初回基線
+ * とも同一値。この完全決定論を前提に、しきい値は「実測値の約 2–3 倍」のマージン方針で固定した:
+ * ランタイム噪声を想定せず、プラットフォーム差（OS/Skia 更新・コーデック状態変化）や
+ * ソース差し替え時の性能変化を吸収する余裕。根拠は nfr_catalog.md NFR-07。
+ * 非中立ケース（mean < 1.0 / p95 < 2.0）・ダウンサンプルケース（同値）・中立ケース
+ * （mean < 0.30・p95 は参考記録のみ）は実契約検査。破れた場合は全指標を failure message に出す。
+ * 中立（全パラメータ既定）ケースの恒等検査は、プレビューと書き出しが同一ノード実装
+ * （RecipeDevelopApplier 共有）であることの検出器として機能する（隠れた片側劣化の発見）。
  *
  * 測定成果物: targetContext（= com.imageshot.benchmark）の filesDir へ
  * /data/data/com.imageshot.benchmark/files/golden_dE_report.json（全ケースの実測値+パラメータ）。
  * 本クラスは JUnit4 プレーンクラス（benchmark の androidTest を MacrobenchmarkRunnerStub で
  * 実行する手動配線前提・`-e class` 指定で 1 クラスのみ計測できる）。
+ *
+ * 【PR-18 追加指標（計画段階の実装）】CIEDE2000 の全画素統計を追加記録する。
+ * assert は追加せず、判定契約は引き続き ΔE76 のみ（契約連続性・Wave3 計画書 PR-18 §3）。
+ * logcat は GoldenDeltaE2000 タグ、report JSON は case オブジェクトへの追記フィールド
+ * metricsCiede2000 に格納（既存キーは不変・追加のみ）。計算の本体は [Ciede2000]。
  */
 class GoldenPreviewExportDeltaETest {
 
     // ------------------------------------------------------------------ 計測ケース
 
     @Test
-    fun goldenDeltaE_nonNeutralRecipe_provisionalThresholds() {
-        // 暫定: exposure +0.35EV / contrast +0.2 / 5600K（微温）/ vibrance +0.15 / master 曲線中立。
+    fun goldenDeltaE_nonNeutralRecipe_fixedThresholds() {
+        // 固定（PR-18）: exposure +0.35EV / contrast +0.2 / 5600K（微温）/ vibrance +0.15 / master 曲線中立。
         runGoldenCase(
             case = "non-neutral(0.35EV,contrast0.2,5600K,vibrance0.15)",
             recipe = goldenRecipe(),
-            meanMax = PROVISIONAL_MEAN_MAX,
-            p95Max = PROVISIONAL_P95_MAX,
-            provisional = true,
+            meanMax = NONNEUTRAL_MEAN_MAX,
+            p95Max = NONNEUTRAL_P95_MAX,
+            provisional = false,
         )
     }
 
     @Test
-    fun goldenDeltaE_downsampledPreview_provisionalThresholds() {
+    fun goldenDeltaE_downsampledPreview_fixedThresholds() {
         // 実プレビューワークロード（ピラミッド sample=2・1024x683 → 書き出し寸法へ resample）。
         runGoldenCase(
             case = "downsampled-preview(540px-sample2)-non-neutral",
             recipe = goldenRecipe(),
             requestedPx = 540,
-            meanMax = PROVISIONAL_MEAN_MAX,
-            p95Max = PROVISIONAL_P95_MAX,
-            provisional = true,
+            meanMax = NONNEUTRAL_MEAN_MAX,
+            p95Max = NONNEUTRAL_P95_MAX,
+            provisional = false,
         )
     }
 
@@ -159,6 +167,13 @@ class GoldenPreviewExportDeltaETest {
                         Bitmap.createScaledBitmap(previewBitmap, exported.width, exported.height, true)
                     }
                 val metrics = computeDeltaE76(previewResampled, exported)
+                // PR-18: ΔE2000 は追加記録のみ（計算失敗時も判定契約に影響しないよう隔離する）。
+                val metrics2000 = try {
+                    computeDeltaE2000(previewResampled, exported)
+                } catch (e: Exception) {
+                    Log.w(TAG_2000, "deltaE2000 metric failed (recorded-only, no effect on assertions): case=$case", e)
+                    null
+                }
 
                 Log.i(
                     TAG,
@@ -183,10 +198,34 @@ class GoldenPreviewExportDeltaETest {
                     ),
                 )
 
+                if (metrics2000 != null) {
+                    Log.i(
+                        TAG_2000,
+                        String.format(
+                            Locale.US,
+                            "case=%s mean=%.4f p95=%.4f p99=%.4f max=%.4f pxCount=%d " +
+                                "preview=%dx%d export=%dx%d recordedOnly=true",
+                            case,
+                            metrics2000.mean,
+                            metrics2000.p95,
+                            metrics2000.p99,
+                            metrics2000.max,
+                            metrics2000.pxCount,
+                            previewBitmap.width,
+                            previewBitmap.height,
+                            exported.width,
+                            exported.height,
+                        ),
+                    )
+                }
+
                 // ---- 成果物 JSON（実測値+パラメータの honest artifact）----
                 persistReport(
                     context,
-                    caseJson(case, recipe, metrics, previewBitmap, exported, meanMax, p95Max, provisional),
+                    caseJson(
+                        case, recipe, metrics, metrics2000, previewBitmap, exported,
+                        meanMax, p95Max, provisional,
+                    ),
                 )
 
                 // ---- 判定（違反時は全指標を failure message に出す・計測を緩和しない）----
@@ -285,6 +324,60 @@ class GoldenPreviewExportDeltaETest {
     private fun labF(t: Double): Double =
         if (t > LAB_EPS) Math.cbrt(t) else (LAB_KAPPA * t + 16.0) / 116.0
 
+    // ------------------------------------------------------------------ ΔE2000 計量（追加出力・記録用）
+
+    /**
+     * 全画素の CIEDE2000 指標（mean / p95 / p99 / max、nearest-rank 百分位）。
+     *
+     * ΔE76（[computeDeltaE76]）と同一の [labOf] 変換（sRGB int → 線形化 → XYZ D65 → Lab）を
+     * 使って Lab ペアを作り、[Ciede2000] へ渡す集計である。既存 ΔE76 計量とは独立の
+     * 追加 1 パスで、1 ケースあたり 1 回分の追加の画素走査と CIEDE2000 計算コストが
+     * 発生する。数値は記録専用である。
+     *
+     * 【計画段階の実装】ΔE2000 には閾値契約がなく assert も行わない（PR-18）。
+     * 将来の実行（PR-18 の 5 連続実行の分布記録）で測定価値が確定した時点で
+     * nfr_catalog への採用判断が行われるまで、判定系（existing assertTrue の 2 条件）には
+     * 一切関与しない。
+     */
+    private fun computeDeltaE2000(preview: Bitmap, exported: Bitmap): DeltaE2000Metrics {
+        check(preview.width == exported.width && preview.height == exported.height) {
+            "ΔE2000 比較の寸法が不一致: preview=${preview.width}x${preview.height} export=${exported.width}x${exported.height}"
+        }
+        val n = preview.width * preview.height
+        val planeA = IntArray(n)
+        val planeB = IntArray(n)
+        preview.getPixels(planeA, 0, preview.width, 0, 0, preview.width, preview.height)
+        exported.getPixels(planeB, 0, exported.width, 0, 0, exported.width, exported.height)
+
+        val deltas = FloatArray(n)
+        var sum = 0.0
+        var max = 0.0f
+        val lab1 = FloatArray(3)
+        val lab2 = FloatArray(3)
+        for (i in 0 until n) {
+            labOf(planeA[i], lab1)
+            labOf(planeB[i], lab2)
+            val d = Ciede2000.deltaE2000(lab1, lab2)
+            deltas[i] = d
+            sum += d
+            if (d > max) max = d
+        }
+        deltas.sort()
+        val mean = sum / n
+        val p95 = deltas[((n * 95 + 99) / 100).coerceIn(1, n) - 1]
+        val p99 = deltas[((n * 99 + 99) / 100).coerceIn(1, n) - 1]
+        return DeltaE2000Metrics(mean, p95, p99, max, n)
+    }
+
+    /** ΔE2000 の case 集計値（既存 [DeltaEMetrics] と同型・判定には使用しない）。 */
+    private class DeltaE2000Metrics(
+        val mean: Double,
+        val p95: Float,
+        val p99: Float,
+        val max: Float,
+        val pxCount: Int,
+    )
+
     // ------------------------------------------------------------------ recipe / ソース構成
 
     /** 非中立（golden）recipe: exposure +0.35EV / contrast +0.2 / 5600K（微温）/ vibrance +0.15。 */
@@ -324,6 +417,7 @@ class GoldenPreviewExportDeltaETest {
         case: String,
         recipe: EditRecipe,
         metrics: DeltaEMetrics,
+        metrics2000: DeltaE2000Metrics?,
         preview: Bitmap,
         export: Bitmap,
         meanMax: Double,
@@ -374,21 +468,49 @@ class GoldenPreviewExportDeltaETest {
                 .put("maxEdgePx", "null")
                 .put("colorSpace", export.colorSpace?.name ?: "unknown"),
         )
+        // PR-18: ΔE2000 追加フィールド（既存キーは不変・読み手は未知キーを無視できる追加のみ）。
+        // metrics2000 が null（計量隔離で失敗）の場合は当該フィールドを書かない。
+        .apply {
+            if (metrics2000 != null) {
+                put(
+                    "metricsCiede2000",
+                    JSONObject()
+                        .put("method", METHOD_CIEDE2000)
+                        .put("mean", metrics2000.mean)
+                        .put("p95", metrics2000.p95.toDouble())
+                        .put("p99", metrics2000.p99.toDouble())
+                        .put("max", metrics2000.max.toDouble())
+                        .put("pxCount", metrics2000.pxCount)
+                        .put("asserted", false),
+                )
+            }
+        }
 
     companion object {
         private const val TAG = "GoldenDeltaE"
         private const val METHOD = "CIE Delta-E76 (sRGB int -> linear -> XYZ D65 -> Lab)"
 
+        /** ΔE2000 追加記録用の logcat タグ（既存 [TAG] と区別する別名・PR-18・記録専用）。 */
+        private const val TAG_2000 = "GoldenDeltaE2000"
+
+        /** ΔE2000 の計法定義（metricsCiede2000.method に書き込む・KL=KC=KH=1 固定）。 */
+        private const val METHOD_CIEDE2000 = "CIEDE2000 (Lab pair from same labOf D65 path, KL=KC=KH=1)"
+
         private const val SRC_W = 2048
         private const val SRC_H = 1365
         private const val SRC_JPEG_QUALITY = 90
 
-        /** 暫定閾値（first-run-baseline。nfr_catalog.md への確定移行は別PRで行う）。 */
-        private const val PROVISIONAL_MEAN_MAX = 3.0
-        private const val PROVISIONAL_P95_MAX = 6.0
+        /** 固定しきい値（PR-18・2026-10-25）。
+         *  根拠: 5 連続実行がビット完全一致（report JSON 同一 SHA-1・σ=0）+ 2026-10-19 初回基線も同一値。
+         *  完全決定論のためランタイム噪声を想定せず、観測値の約 2–3 倍を
+         *  プラットフォーム/コーデック状態変化・ソース差し替え吸収用マージンとする（nfr_catalog NFR-07）。 */
+        private const val NONNEUTRAL_MEAN_MAX = 1.00
 
-        /** 中立ケースの実契約。プレビュー/書き出し同一ノード実装のため恒等差分のみ許す。 */
-        private const val NEUTRAL_MEAN_MAX = 1.0
+        /** 非中立ケースの p95 固定しきい値（実測 p95 1.221 / 1.193 に対する約 1.6–1.7 倍）。 */
+        private const val NONNEUTRAL_P95_MAX = 2.00
+
+        /** 中立ケースの恒等契約（実測 mean 0.100 ×3）。プレビュー/書き出し同一ノード実装のため恒等差のみ許す。 */
+        private const val NEUTRAL_MEAN_MAX = 0.30
 
         private val caseReports = ArrayList<JSONObject>()
         private var goldenSourceFile: File? = null
