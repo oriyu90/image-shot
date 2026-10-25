@@ -1,0 +1,42 @@
+<resources>
+    <!-- PR-27 G1: feature:library の文言正本。既定（ja）。en は別 PR。 -->
+    <!-- 画面 -->
+    <string name="library_import_in_progress">取り込み中… %1$d/%2$d</string>
+    <string name="library_import_pick">写真を取り込む（複数選択）</string>
+    <string name="library_import_files">ファイル（SAF）</string>
+    <string name="library_import_tree">フォルダー（SAF）</string>
+    <string name="library_search_placeholder">表示名で検索</string>
+    <string name="library_sort_date_taken">撮影日</string>
+    <string name="library_sort_display_name">表示名</string>
+    <string name="library_availability_checking">確認中…</string>
+    <string name="library_availability_check">可用性確認</string>
+    <string name="library_cell_content_disconnected">%1$s（切断: 再関連付けが必要）</string>
+    <string name="library_cell_state_revoked">権限失効</string>
+    <string name="library_cell_state_disconnected">切断</string>
+    <string name="library_cell_relink">再関連付け</string>
+    <string name="library_cell_fingerprint_uncomputed"> · 指紋未計算</string>
+
+    <!-- ViewModel messages（検査・取り込み） -->
+    <string name="library_msg_inspect_failed">検査失敗: %1$s</string>
+    <string name="library_msg_inspect_alert">検査警告: %1$s</string>
+    <string name="library_msg_import_batch_done">取り込み完了: %1$d / %2$d 件（非対応候補・失敗は上記に明示）</string>
+    <string name="library_msg_import_one_ok">取り込みOK: %1$s</string>
+    <string name="library_msg_import_one_failed">取り込み失敗: %1$s → %2$s %3$s</string>
+    <string name="library_msg_import_one_alert">取り込み警告: %1$s → %2$s</string>
+
+    <!-- ViewModel messages（フォルダー・可用性・再関連付け・指紋） -->
+    <string name="library_msg_tree_grant_failed">フォルダー権限の永続化に失敗: %1$s（このセッションのみ有効）</string>
+    <string name="library_msg_tree_scan_failed">フォルダー走査失敗: %1$s %2$s</string>
+    <string name="library_msg_tree_scan_alert">フォルダー走査警告: %1$s</string>
+    <string name="library_msg_tree_empty">対象画像がフォルダー直下に見つかりません（サブフォルダーは未走査）</string>
+    <string name="library_msg_sweep_found">URI失効: 権限失効 %1$d件 / 切断 %2$d件 → セルの「再関連付け」から復旧</string>
+    <string name="library_msg_sweep_ok">可用性確認: %1$d件 すべて接続（回復 %2$d件）</string>
+    <string name="library_msg_relink_missing">再関連付け失敗: 対象が見つかりません</string>
+    <string name="library_msg_relink_failed">再関連付け失敗: %1$s %2$s</string>
+    <string name="library_msg_relink_mismatch">再関連付け失敗: 選択ファイルが原本と一致しません（sha-256 照合不一致）</string>
+    <string name="library_msg_relink_ok">再関連付け完了: %1$s</string>
+    <string name="library_warn_fingerprint_uncomputed">旧指紋が未計算のため同じ写真か照合できませんでした（登録時に遅延計画）</string>
+    <string name="library_warn_permission_not_persisted">persistable permission が取得できません（再起動後は再度関連付けが必要）</string>
+    <string name="library_msg_fingerprint_failed">指紋計算に失敗: %1$s (%2$s)</string>
+    <string name="library_msg_fingerprint_backfill_failed">指紋の遅延計算に失敗: %1$s %2$s</string>
+</resources>

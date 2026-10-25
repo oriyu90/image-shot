@@ -40,10 +40,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.imageshot.core.model.Asset
+import com.imageshot.feature.library.R as LibraryR
 import java.io.File
 import java.time.Instant
 import java.time.ZoneId
@@ -191,13 +193,13 @@ private fun ImportHeader(
                 onClick = onPick,
                 enabled = !importing,
             ) {
-                Text(if (importing) "取り込み中… $batchDone/$batchTotal" else "写真を取り込む（複数選択）")
+                Text(if (importing) stringResource(LibraryR.string.library_import_in_progress, batchDone, batchTotal) else stringResource(LibraryR.string.library_import_pick))
             }
             OutlinedButton(onClick = onOpenFiles, enabled = !importing) {
-                Text("ファイル（SAF）")
+                Text(stringResource(LibraryR.string.library_import_files))
             }
             OutlinedButton(onClick = onOpenTree, enabled = !importing) {
-                Text("フォルダー（SAF）")
+                Text(stringResource(LibraryR.string.library_import_tree))
             }
         }
     }
@@ -221,21 +223,21 @@ private fun SearchSortBar(
             value = query,
             onValueChange = onQueryChange,
             singleLine = true,
-            placeholder = { Text("表示名で検索") },
+            placeholder = { Text(stringResource(LibraryR.string.library_search_placeholder)) },
             modifier = Modifier.weight(1f),
         )
         FilterChip(
             selected = sortOrder == LibraryViewModel.AssetSortOrder.DATE_TAKEN_DESC,
             onClick = { onSelectSort(LibraryViewModel.AssetSortOrder.DATE_TAKEN_DESC) },
-            label = { Text("撮影日") },
+            label = { Text(stringResource(LibraryR.string.library_sort_date_taken)) },
         )
         FilterChip(
             selected = sortOrder == LibraryViewModel.AssetSortOrder.DISPLAY_NAME_ASC,
             onClick = { onSelectSort(LibraryViewModel.AssetSortOrder.DISPLAY_NAME_ASC) },
-            label = { Text("表示名") },
+            label = { Text(stringResource(LibraryR.string.library_sort_display_name)) },
         )
         TextButton(onClick = onRefreshAvailability, enabled = !sweeping) {
-            Text(if (sweeping) "確認中…" else "可用性確認")
+            Text(stringResource(if (sweeping) LibraryR.string.library_availability_checking else LibraryR.string.library_availability_check))
         }
     }
 }
@@ -271,7 +273,7 @@ private fun AssetCell(
             AsyncImage(
                 model = thumbnailPath?.let { File(it) } ?: asset.sourceUri,
                 contentDescription = if (disconnected) {
-                    "${asset.displayName}（切断: 再関連付けが必要）"
+                    stringResource(LibraryR.string.library_cell_content_disconnected, asset.displayName)
                 } else {
                     asset.displayName
                 },
@@ -281,7 +283,13 @@ private fun AssetCell(
             )
             if (disconnected) {
                 Text(
-                    text = if (asset.availability == Asset.AVAILABILITY_REVOKED) "権限失効" else "切断",
+                    text = stringResource(
+                        if (asset.availability == Asset.AVAILABILITY_REVOKED) {
+                            LibraryR.string.library_cell_state_revoked
+                        } else {
+                            LibraryR.string.library_cell_state_disconnected
+                        },
+                    ),
                     style = MaterialTheme.typography.labelMedium,
                     color = Color(0xFFFFB59B),
                     modifier = Modifier.align(Alignment.TopStart).padding(4.dp),
@@ -292,7 +300,7 @@ private fun AssetCell(
                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                     modifier = Modifier.align(Alignment.BottomCenter).padding(4.dp),
                 ) {
-                    Text("再関連付け", style = MaterialTheme.typography.labelSmall)
+                    Text(stringResource(LibraryR.string.library_cell_relink), style = MaterialTheme.typography.labelSmall)
                 }
             }
         }
@@ -304,7 +312,11 @@ private fun AssetCell(
         )
         Text(
             text = "${asset.sniffedFormat} · ${asset.width}×${asset.height}" +
-                if (asset.imageFingerprint == null) " · 指紋未計算" else "",
+                if (asset.imageFingerprint == null) {
+                    stringResource(LibraryR.string.library_cell_fingerprint_uncomputed)
+                } else {
+                    ""
+                },
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,

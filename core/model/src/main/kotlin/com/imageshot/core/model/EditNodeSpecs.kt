@@ -95,23 +95,23 @@ object EditNodeSpecs {
 
     // ---------------------------------------------------------------- HSL 8系統
 
-    /** 標準8系統のバンドID（正本キー名・永続形式）と日本語表示ラベルの対。 */
-    val HSL_BANDS: List<Pair<String, String>> = listOf(
-        "red" to "赤",
-        "orange" to "オレンジ",
-        "yellow" to "黄",
-        "green" to "緑",
-        "aqua" to "水",
-        "blue" to "青",
-        "purple" to "紫",
-        "magenta" to "マゼンタ",
+    /** 標準8系統のバンドID（正本キー名・永続形式・この順で LUT を並べる）。表示ラベルは feature:editor res（PR-27）。 */
+    val HSL_BANDS: List<String> = listOf(
+        "red",
+        "orange",
+        "yellow",
+        "green",
+        "aqua",
+        "blue",
+        "purple",
+        "magenta",
     )
 
-    /** パラメータID（キー後半）と日本語表示ラベルの対。 */
-    val HSL_PARAMS: List<Pair<String, String>> = listOf(
-        "hue" to "色相",
-        "sat" to "彩度",
-        "lum" to "明るさ",
+    /** パラメータID（キー後半）。表示ラベルは feature:editor res（PR-27）。 */
+    val HSL_PARAMS: List<String> = listOf(
+        "hue",
+        "sat",
+        "lum",
     )
 
     /**
@@ -134,10 +134,10 @@ object EditNodeSpecs {
     const val HSL_HUE_SPAN_DEG = 30.0
 
     /** バンドIDのインデックス（未知IDは null）。 */
-    fun bandIndex(bandId: String): Int? = HSL_BANDS.indexOfFirst { it.first == bandId }.takeIf { it >= 0 }
+    fun bandIndex(bandId: String): Int? = HSL_BANDS.indexOf(bandId).takeIf { it >= 0 }
 
     /** パラメータIDのインデックス（未知IDは null）。 */
-    fun paramIndex(paramId: String): Int? = HSL_PARAMS.indexOfFirst { it.first == paramId }.takeIf { it >= 0 }
+    fun paramIndex(paramId: String): Int? = HSL_PARAMS.indexOf(paramId).takeIf { it >= 0 }
 
     /** 正規化済み key（例 `red.hue`）を生成する。 */
     fun hslKey(bandId: String, paramId: String): String = "$bandId.$paramId"

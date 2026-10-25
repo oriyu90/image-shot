@@ -12,12 +12,14 @@ import com.imageshot.core.model.Asset
 import com.imageshot.core.model.EditEventKind
 import com.imageshot.core.model.EditNodeSpecs
 import com.imageshot.core.model.EditRecipe
+import com.imageshot.core.model.Strings
 import com.imageshot.core.model.ImageOpResult
 import com.imageshot.core.model.RecipeParameterEdit
 import com.imageshot.core.model.RenderRequest
 import com.imageshot.core.model.RenderResult
 import com.imageshot.core.render.PhotoRenderer
 import com.imageshot.core.render.RenderBitmapStore
+import com.imageshot.feature.editor.R as EditorR
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -49,6 +51,8 @@ class EditorViewModel(
     private val renderer: PhotoRenderer,
     private val bitmaps: RenderBitmapStore,
     private val editStore: EditStore,
+    /** 文言取得（PR-27 G1）。app 層が Context.getString を結線する。VM 内に日本語リテラルは置かない。 */
+    private val strings: Strings,
 ) : ViewModel() {
 
     enum class SaveState { SAVED, SAVING, FAILED }
@@ -133,7 +137,7 @@ class EditorViewModel(
                 is ImageOpResult.Failure -> {
                     saveState.value = SaveState.FAILED
                     saveFailure.value = "${result.code}: ${result.detail.orEmpty()}"
-                    render.value = RenderOutcome(null, emptyList(), "編集文書の読み込みに失敗")
+                    render.value = RenderOutcome(null, emptyList(), strings.get(EditorR.string.editor_msg_document_load_failed))
                 }
                 else -> Unit
             }
@@ -206,7 +210,7 @@ class EditorViewModel(
             val docId = documentId
             if (docId == null || recipe.value == null) {
                 saveState.value = SaveState.FAILED
-                saveFailure.value = "編集文書が未ロード"
+                saveFailure.value = strings.get(EditorR.string.editor_msg_doc_not_loaded)
                 return@launch
             }
             when (val result = editStore.commit(docId, committedRevision, RecipeParameterEdit(id.recipePath, clamped))) {
@@ -387,7 +391,7 @@ class EditorViewModel(
             val docId = documentId
             if (docId == null || recipe.value == null) {
                 saveState.value = SaveState.FAILED
-                saveFailure.value = "編集文書が未ロード"
+                saveFailure.value = strings.get(EditorR.string.editor_msg_doc_not_loaded)
                 return@launch
             }
             when (val result = action(docId)) {
@@ -530,35 +534,54 @@ class EditorViewModel(
     private fun historyRow(item: EditStore.EditStoreHistoryItem): HistoryRow {
         val id = item.path?.let { AdjustmentId.byPath(it) }
         val opLabel = when (item.op) {
-            RecipeParameterEdit.OP_APPLY -> "変更"
-            RecipeParameterEdit.OP_UNDO -> "取り消し"
-            RecipeParameterEdit.OP_REDO -> "やり直し"
+            RecipeParameterEdit.OP_APPLY -> strings.get(EditorR.string.editor_history_op_apply)
+            RecipeParameterEdit.OP_UNDO -> strings.get(EditorR.string.editor_history_op_undo)
+            RecipeParameterEdit.OP_REDO -> strings.get(EditorR.string.editor_history_op_redo)
             else -> item.eventType
         }
         val label: String = when {
             item.eventType == EditEventKind.CURVE.id -> {
                 // master カーブの絶対状態を要約表示（payload JSON を UI に露出しない）。
-                "$opLabel: マスターカーブ ${item.curvePoints?.size ?: 0}点"
+                strings.get(
+                    EditorR.string.editor_history_curve,
+                    opLabel,
+                    item.curvePoints?.size ?: 0,
+                )
             }
             item.eventType == EditEventKind.GEOMETRY.id -> {
                 val g = item.geometry
-                if (g == null) "$opLabel: ジオメトリ"
+                if (g == null) {
+                    strings.get(EditorR.string.editor_history_geometry_plain, opLabel)
+                }
                 else {
                     val flips = listOfNotNull(
-                        if (g.mirrorX) "水平反転" else null,
-                        if (g.mirrorY) "垂直反転" else null,
+                        if (g.mirrorX) strings.get(EditorR.string.editor_history_flip_h) else null,
+                        if (g.mirrorY) strings.get(EditorR.string.editor_history_flip_v) else null,
                     ).joinToString("・")
                     val full = g.cropNorm == EditRecipe.GeometryParams().cropNorm
-                    val crop = if (full) null else "クロップ"
-                    val detail = listOf("回転${g.angleDeg.toInt()}°", flips, crop).filterNotNull().joinToString("・")
-                    "$opLabel: ジオメトリ（$detail）"
+                    val crop = if (full) null else strings.get(EditorR.string.editor_history_crop)
+                    val detail = listOf(
+                        strings.get(EditorR.string.editor_history_rotation, g.angleDeg.toInt()),
+                        flips,
+                        crop,
+                    ).filterNotNull().joinToString("・")
+                    strings.get(EditorR.string.editor_history_geometry, opLabel, detail)
                 }
             }
-            id == null -> "${item.path ?: item.eventType} $opLabel"
+            id == null -> strings.get(
+                        EditorR.string.editor_history_by_path,
+                        item.path ?: item.eventType,
+                        opLabel,
+                    )
             else -> {
                 val v = item.value
                 val valueText = if (v != null) id.formatValue(v) + id.unit.display else ""
-                "$opLabel: ${id.label} $valueText"
+                strings.get(
+                        EditorR.string.editor_history_slider,
+                        opLabel,
+                        strings.get(AdjustmentLabels.labelRes(id)),
+                        valueText,
+                    )
             }
         }
         return HistoryRow(

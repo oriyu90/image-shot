@@ -51,6 +51,8 @@ class MainActivity : ComponentActivity() {
                                     assetDao = container.assetDao,
                                     importRepository = container.importRepository,
                                     thumbnails = container.thumbnailGenerator,
+                                    // PR-27 G1: VM 文言は res 参照（application context 結線）。
+                                    strings = container.strings,
                                 )
                             }
                         LibraryScreen(
@@ -70,6 +72,7 @@ class MainActivity : ComponentActivity() {
                                     renderer = container.renderer,
                                     bitmaps = container.renderBitmaps,
                                     editStore = container.editStore,
+                                    strings = container.strings,
                                 )
                             }
                         val editorState by vm.state().collectAsState()
@@ -104,6 +107,7 @@ class MainActivity : ComponentActivity() {
                                     repository = container.exportJobRepository,
                                     editStore = container.editStore,
                                     assetDao = container.assetDao,
+                                    strings = container.strings,
                                 )
                             }
                         val exportState by vm.observeJobs().collectAsState()

@@ -1,0 +1,31 @@
+<resources>
+    <!-- PR-27 G1: feature:export の文言正本。既定（ja）。en は別 PR。 -->
+    <!-- 概要段落の文言は PR-23（ADR-026 stage-1 + EXIF pass-through）実装後の現実を反映
+         （「EXIF pass-through 未実装」の旧文言は時代錯誤のため撤去）。 -->
+    <string name="export_title">書き出し</string>
+    <string name="export_pipeline_note">ジョブの実処理は WorkManager（ADR-010）。登録後は QUEUED → PREPARING → RENDERING → ENCODING → VERIFYING → PUBLISHING → COMPLETE の二段階コミットで進行し、部分出力は完了扱いされません。</string>
+    <string name="export_support_note">※ 入力 EXIF は撮影情報の whitelist 9 タグのみ書き戻す（Make/Model/LensModel/DateTime/DateTimeOriginal/FNumber/ISO/FocalLength/ExposureTime・orientation は常に 1・GPS/location は書かない）。RAW/TIFF 書き出しは非対応。HDR ソースは編集内容に応じて gainmap の pass-through または SDR-only になり、選択理由の警告は request ファイルに記録される。ジョブ設定正本はキャッシュ領域の request ファイルのため、キャッシュ消去で FAILED_PERMANENT になります（再設定が必要）。</string>
+    <string name="export_enqueuing">登録中…</string>
+    <string name="export_button_enqueue">書き出しを開始</string>
+
+    <!-- 対象文書 -->
+    <string name="export_document_error_head">編集文書の読み込みに失敗</string>
+    <string name="export_document_error_detail">%1$s: %2$s</string>
+    <string name="export_document_loading">読み込み中…</string>
+    <string name="export_document_summary">文書 %1$s… rev%2$d / スライダー変更 %3$d件%4$s</string>
+    <string name="export_document_has_curve"> / トーンカーブあり</string>
+
+    <!-- 形式・画質・出力先 -->
+    <string name="export_format">形式</string>
+    <string name="export_quality">画質</string>
+    <string name="export_quality_value">画質: %1$d</string>
+    <string name="export_quality_png_note">PNG（可逆）では画質設定は N/A</string>
+    <string name="export_destination_none">出力先: 未選択</string>
+    <string name="export_destination">出力先: %1$s</string>
+    <string name="export_destination_pick">出力先を選択…</string>
+
+    <!-- ジョブ -->
+    <string name="export_jobs_title">ジョブ一覧</string>
+    <string name="export_jobs_empty">ジョブはありません</string>
+    <string name="export_job_error">エラー: %1$s</string>
+</resources>

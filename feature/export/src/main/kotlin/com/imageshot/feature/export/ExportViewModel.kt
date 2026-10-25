@@ -4,12 +4,14 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.imageshot.core.database.AssetDao
 import com.imageshot.core.database.EditStore
+import com.imageshot.feature.export.R as ExportR
 import com.imageshot.core.database.toModel
 import com.imageshot.core.model.AdjustmentId
 import com.imageshot.core.model.Asset
 import com.imageshot.core.model.EditRecipe
 import com.imageshot.core.model.ErrorCode
 import com.imageshot.core.model.ExportProgress
+import com.imageshot.core.model.Strings
 import com.imageshot.core.model.ImageOpResult
 import kotlin.math.abs
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -42,6 +44,8 @@ class ExportViewModel(
     private val repository: ExportJobRepository,
     private val editStore: EditStore,
     private val assetDao: AssetDao,
+    /** 文言取得（PR-27 G1）。app 層が Context.getString を結線する。VM 内に日本語リテラルは置かない。 */
+    private val strings: Strings,
 ) : ViewModel() {
 
     /** 対象文書の表示/エンキューに必要な投影（読み取り専用。ここからレシピを書換えない）。 */
@@ -91,11 +95,16 @@ class ExportViewModel(
                 }
                 is ImageOpResult.Failure -> {
                     // ADR-014: 正本が作れない場合、代替入力で無通知に続行しない。
-                    documentError.value = "${result.code}: ${result.detail.orEmpty()}"
+                    // code/detail は技術正本（そのまま表示）で文言テンプレートのみ res 参照。
+                    documentError.value = strings.get(
+                        ExportR.string.export_document_error_detail,
+                        result.code.name,
+                        result.detail.orEmpty(),
+                    )
                     document.value = null
                 }
                 else -> {
-                    documentError.value = "unexpected result from EditStore"
+                    documentError.value = "unexpected result from EditStore" // 非CJK・開発者向け正本（台帳記録）
                     document.value = null
                 }
             }

@@ -1,5 +1,6 @@
 package com.imageshot.feature.editor
 
+import androidx.annotation.StringRes
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -46,11 +47,13 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.imageshot.core.model.AdjustmentId
+import com.imageshot.feature.editor.R as EditorR
 import com.imageshot.core.model.EditEventKind
 import com.imageshot.core.model.EditNodeSpecs
 import com.imageshot.core.model.EditRecipe
@@ -165,12 +168,12 @@ private fun EditorTopBar(state: EditorViewModel.EditorState) {
     ) {
         Column(Modifier.weight(1f)) {
             Text(
-                text = state.asset?.displayName ?: "写真を読み込み中…",
+                text = state.asset?.displayName ?: stringResource(EditorR.string.editor_loading_title),
                 style = MaterialTheme.typography.titleSmall,
                 color = EditorPalette.textPrimary,
             )
             Text(
-                text = "改訂 r${state.revision}",
+                text = stringResource(EditorR.string.editor_revision, state.revision),
                 style = MaterialTheme.typography.labelSmall,
                 color = EditorPalette.textSecondary,
             )
@@ -182,9 +185,9 @@ private fun EditorTopBar(state: EditorViewModel.EditorState) {
 @Composable
 private fun SaveStateBadge(saveState: EditorViewModel.SaveState, failure: String?) {
     val (text, color) = when (saveState) {
-        EditorViewModel.SaveState.SAVING -> "保存中…" to EditorPalette.textSecondary
-        EditorViewModel.SaveState.SAVED -> "保存済み" to EditorPalette.textSecondary
-        EditorViewModel.SaveState.FAILED -> "保存に失敗" to EditorPalette.error
+        EditorViewModel.SaveState.SAVING -> stringResource(EditorR.string.editor_save_saving) to EditorPalette.textSecondary
+        EditorViewModel.SaveState.SAVED -> stringResource(EditorR.string.editor_save_saved) to EditorPalette.textSecondary
+        EditorViewModel.SaveState.FAILED -> stringResource(EditorR.string.editor_save_failed) to EditorPalette.error
     }
     Column(horizontalAlignment = Alignment.End) {
         Text(text, style = MaterialTheme.typography.labelMedium, color = color)
@@ -227,7 +230,7 @@ private fun PreviewPane(
         if (shown != null) {
             Image(
                 bitmap = shown,
-                contentDescription = if (showBefore) "Before（既定値）プレビュー" else "編集プレビュー",
+                contentDescription = stringResource(if (showBefore) EditorR.string.editor_cd_before_preview else EditorR.string.editor_cd_preview),
                 contentScale = ContentScale.Fit,
                 modifier = Modifier
                     .fillMaxSize()
@@ -240,14 +243,14 @@ private fun PreviewPane(
             )
         } else {
             Text(
-                text = "プレビューを生成中…",
+                text = stringResource(EditorR.string.editor_generating_preview),
                 color = EditorPalette.textSecondary,
                 style = MaterialTheme.typography.bodyMedium,
             )
         }
         if (showBefore && images.before != null) {
             Text(
-                text = "Before（既定値）",
+                text = stringResource(EditorR.string.editor_badge_before),
                 style = MaterialTheme.typography.labelMedium,
                 color = EditorPalette.textPrimary,
                 modifier = Modifier
@@ -267,7 +270,7 @@ private fun PreviewPane(
                     .padding(8.dp),
             ) {
                 Text(
-                    text = "描画に失敗しました",
+                    text = stringResource(EditorR.string.editor_render_failed_title),
                     style = MaterialTheme.typography.labelMedium,
                     color = EditorPalette.error,
                 )
@@ -284,13 +287,13 @@ private fun PreviewPane(
 // --------------------------------------------------------------- 調整パネル（ツールタブ）
 
 /** ツールタブ。実装済みは [BASIC] [CURVE] [HSL] [GEOMETRY] のみ（ADR-014 に基づく明示）。 */
-private enum class EditorToolTab(val label: String, val hint: String?, val implemented: Boolean) {
-    BASIC("基本調整", null, true),
-    CURVE("カーブ", "R/G/B チャンネル別は未実装（master のみ）", true),
-    HSL("HSL", null, true),
-    GEOMETRY("ジオメトリ", "自由角度・自由クロップ・透視/レンズは未実装", true),
-    DETAIL("ディテール", "未実装（M2 予約）", false),
-    LOCAL("局部補正", "未実装（M3 予約）", false),
+private enum class EditorToolTab(val labelRes: Int, val hintRes: Int?, val implemented: Boolean) {
+    BASIC(EditorR.string.editor_tab_basic, null, true),
+    CURVE(EditorR.string.editor_tab_curve, EditorR.string.editor_tab_hint_curve, true),
+    HSL(EditorR.string.editor_tab_hsl, null, true),
+    GEOMETRY(EditorR.string.editor_tab_geometry, EditorR.string.editor_tab_hint_geometry, true),
+    DETAIL(EditorR.string.editor_tab_detail, EditorR.string.editor_tab_hint_detail, false),
+    LOCAL(EditorR.string.editor_tab_local, EditorR.string.editor_tab_hint_local, false),
 }
 
 @Composable
@@ -321,8 +324,8 @@ private fun ToolPanel(
         ) {
             EditorToolTab.entries.forEach { tab ->
                 ToolTab(
-                    label = tab.label,
-                    hint = tab.hint,
+                    label = stringResource(tab.labelRes),
+                    hint = tab.hintRes?.let { stringResource(it) },
                     implemented = tab.implemented,
                     selected = selected == tab,
                     onClick = { selected = tab },
@@ -335,12 +338,12 @@ private fun ToolPanel(
             EditorToolTab.HSL -> HslContent(state, onSliderPreview, onSliderCommit)
             EditorToolTab.GEOMETRY -> GeometryContent(state, onGeometryRotate, onGeometryFlip, onGeometryCrop, onGeometryResetCrop)
             EditorToolTab.DETAIL -> UnimplementedContent(
-                title = "ディテール（シャープ/ノイズ低減）",
-                message = "M2 予約。現在のビルドには含まれず、レシピに値があっても適用されません（警告表示）。",
+                titleRes = EditorR.string.editor_detail_title,
+                messageRes = EditorR.string.editor_detail_notice,
             )
             EditorToolTab.LOCAL -> UnimplementedContent(
-                title = "局部補正（マスク）",
-                message = "M3 予約。現在のビルドには含まれず、レシピにマスクがあっても適用されません（警告表示）。",
+                titleRes = EditorR.string.editor_local_title,
+                messageRes = EditorR.string.editor_local_notice,
             )
         }
         TextButton(
@@ -350,7 +353,10 @@ private fun ToolPanel(
             modifier = Modifier.padding(top = 4.dp),
         ) {
             Text(
-                text = if (historyOpen) "履歴を閉じる（${state.history.size}件）" else "履歴を表示（${state.history.size}件）",
+                text = stringResource(
+                    if (historyOpen) EditorR.string.editor_history_open else EditorR.string.editor_history_closed,
+                    state.history.size,
+                ),
                 style = MaterialTheme.typography.labelMedium,
                 color = EditorPalette.textSecondary,
             )
@@ -370,7 +376,7 @@ private fun ToolPanel(
                 }
                 if (state.history.isEmpty()) {
                     Text(
-                        text = "確定済みの操作はまだありません",
+                        text = stringResource(EditorR.string.editor_history_empty),
                         style = MaterialTheme.typography.labelSmall,
                         color = EditorPalette.textSecondary,
                     )
@@ -410,7 +416,7 @@ private fun ToolTab(
         }
         if (!implemented) {
             Text(
-                text = "未実装",
+                text = stringResource(EditorR.string.editor_not_implemented),
                 style = MaterialTheme.typography.labelSmall,
                 color = EditorPalette.accent,
             )
@@ -433,7 +439,7 @@ private fun BasicAdjustmentsContent(
             .padding(top = 8.dp),
     ) {
         Text(
-            text = "基本調整",
+            text = stringResource(EditorR.string.editor_tab_basic),
             style = MaterialTheme.typography.titleSmall,
             color = EditorPalette.textPrimary,
             modifier = Modifier.weight(1f),
@@ -441,7 +447,7 @@ private fun BasicAdjustmentsContent(
         if (state.dragging) {
             // §4.3: 動作の重い場合の品質切替を明示（画質劣化は保存に反映しない）。
             Text(
-                text = "ドラッグ中: 低解像度 / 離す: 高解像度",
+                text = stringResource(EditorR.string.editor_drag_quality),
                 style = MaterialTheme.typography.labelSmall,
                 color = EditorPalette.textSecondary,
             )
@@ -485,18 +491,18 @@ private fun MasterCurveContent(
             .padding(top = 8.dp),
     ) {
         Text(
-            text = "カーブ（master）",
+            text = stringResource(EditorR.string.editor_curve_title),
             style = MaterialTheme.typography.titleSmall,
             color = EditorPalette.textPrimary,
             modifier = Modifier.weight(1f),
         )
         // 強調色はこのタブの操作対象（リセット）のみ。
         TextButton(onClick = onCurveReset) {
-            Text("中立へ戻す", color = EditorPalette.accent)
+            Text(stringResource(EditorR.string.editor_curve_reset), color = EditorPalette.accent)
         }
     }
     Text(
-        text = "ドラッグ: 点を移動 / タップ: 点を追加 / ダブルタップ: 点を削除",
+        text = stringResource(EditorR.string.editor_curve_help),
         style = MaterialTheme.typography.labelSmall,
         color = EditorPalette.textSecondary,
     ) 
@@ -621,13 +627,18 @@ private fun MasterCurveContent(
         }
     }
     Text(
-        text = "制御点 ${displayed.size}/${EditNodeSpecs.CURVE_MAX_POINTS}（最小 ${EditNodeSpecs.CURVE_MIN_POINTS}）",
+        text = stringResource(
+            EditorR.string.editor_curve_points,
+            displayed.size,
+            EditNodeSpecs.CURVE_MAX_POINTS,
+            EditNodeSpecs.CURVE_MIN_POINTS,
+        ),
         style = MaterialTheme.typography.labelSmall,
         color = EditorPalette.textSecondary,
         modifier = Modifier.padding(top = 4.dp),
     )
     Text(
-        text = "R/G/B チャンネル別カーブは未実装（master のみ。チャンネル指定はレシピに値があれば警告表示）",
+        text = stringResource(EditorR.string.editor_curve_channels_hint),
         style = MaterialTheme.typography.labelSmall,
         color = EditorPalette.textSecondary,
     )
@@ -668,9 +679,9 @@ private fun HslContent(
     onSliderPreview: (AdjustmentId, Double) -> Unit,
     onSliderCommit: (AdjustmentId, Double) -> Unit,
 ) {
-    var selectedBand by remember { mutableStateOf(EditNodeSpecs.HSL_BANDS.first().first) }
+    var selectedBand by remember { mutableStateOf(EditNodeSpecs.HSL_BANDS.first()) }
     Text(
-        text = "HSL カラーミキサー（標準8系統）",
+        text = stringResource(EditorR.string.editor_hsl_title),
         style = MaterialTheme.typography.titleSmall,
         color = EditorPalette.textPrimary,
         modifier = Modifier.padding(top = 8.dp),
@@ -681,7 +692,8 @@ private fun HslContent(
             .fillMaxWidth()
             .padding(top = 4.dp),
     ) {
-        EditNodeSpecs.HSL_BANDS.forEach { (bandId, label) ->
+        EditNodeSpecs.HSL_BANDS.forEach { bandId ->
+            val label = stringResource(HslBandLabels.bandRes(bandId))
             val selected = selectedBand == bandId
             Column(
                 modifier = Modifier
@@ -698,7 +710,7 @@ private fun HslContent(
             }
         }
     }
-    val bandBindings = EditNodeSpecs.HSL_PARAMS.map { (paramId, _) ->
+    val bandBindings = EditNodeSpecs.HSL_PARAMS.map { paramId ->
         state.sliders.firstOrNull { bind ->
             bind.id.recipePath == "develop.color.hsl.$selectedBand.$paramId"
         }
@@ -714,7 +726,7 @@ private fun HslContent(
         }
     }
     Text(
-        text = "色相 ±100 = ±30° / 彩度・明るさは −100..100（明るさは線形光で 2^v 増幅）",
+        text = stringResource(EditorR.string.editor_hsl_legend),
         style = MaterialTheme.typography.labelSmall,
         color = EditorPalette.textSecondary,
     )
@@ -736,36 +748,44 @@ private fun GeometryContent(
     onCropReset: () -> Unit,
 ) {
     Text(
-        text = "ジオメトリ",
+        text = stringResource(EditorR.string.editor_geometry_title),
         style = MaterialTheme.typography.titleSmall,
         color = EditorPalette.textPrimary,
         modifier = Modifier.padding(top = 8.dp),
     )
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        TextButton(onClick = { onRotate(-1) }) { Text("⟲ 90°左回転", color = EditorPalette.textPrimary) }
-        TextButton(onClick = { onRotate(1) }) { Text("⟳ 90°右回転", color = EditorPalette.textPrimary) }
+        TextButton(onClick = { onRotate(-1) }) { Text(stringResource(EditorR.string.editor_rotate_left), color = EditorPalette.textPrimary) }
+        TextButton(onClick = { onRotate(1) }) { Text(stringResource(EditorR.string.editor_rotate_right), color = EditorPalette.textPrimary) }
     }
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         TextButton(onClick = { onFlip(true) }) {
             Text(
-                text = if (state.geometry.mirrorX) "水平反転: ON" else "水平反転: OFF",
+                text = stringResource(
+                    if (state.geometry.mirrorX) EditorR.string.editor_flip_h_on else EditorR.string.editor_flip_h_off,
+                ),
                 color = if (state.geometry.mirrorX) EditorPalette.accent else EditorPalette.textPrimary,
             )
         }
         TextButton(onClick = { onFlip(false) }) {
             Text(
-                text = if (state.geometry.mirrorY) "垂直反転: ON" else "垂直反転: OFF",
+                text = stringResource(
+                    if (state.geometry.mirrorY) EditorR.string.editor_flip_v_on else EditorR.string.editor_flip_v_off,
+                ),
                 color = if (state.geometry.mirrorY) EditorPalette.accent else EditorPalette.textPrimary,
             )
         }
     }
     Text(
-        text = "現在: 回転${state.geometry.angleDeg.toInt()}° / クロップ ${cropSummary(state.geometry)}",
+        text = stringResource(
+            EditorR.string.editor_geometry_status,
+            state.geometry.angleDeg.toInt(),
+            cropSummary(state.geometry, stringResource(EditorR.string.editor_crop_none)),
+        ),
         style = MaterialTheme.typography.labelSmall,
         color = EditorPalette.textSecondary,
     )
     Text(
-        text = "クロップ（中央寄せ・プリセット比。クロップ縦横比は 90/270°回転時に自動で入れ替える）",
+        text = stringResource(EditorR.string.editor_crop_header),
         style = MaterialTheme.typography.bodySmall,
         color = EditorPalette.textPrimary,
         modifier = Modifier.padding(top = 8.dp),
@@ -773,7 +793,7 @@ private fun GeometryContent(
     // プリセット（原寸/1:1/3:2/4:3/16:9）。操作ごとに確定。プレビューはレンダリング経由で即反映。
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         TextButton(onClick = onCropReset) {
-            Text("原寸", color = EditorPalette.textPrimary)
+            Text(stringResource(EditorR.string.editor_crop_original), color = EditorPalette.textPrimary)
         }
         listOf("1:1" to 1.0, "3:2" to 1.5, "4:3" to 4.0 / 3.0, "16:9" to 16.0 / 9.0).forEach { (label, aspect) ->
             TextButton(onClick = { onCrop(aspect) }) {
@@ -782,15 +802,15 @@ private fun GeometryContent(
         }
     }
     Text(
-        text = "自由角度回転・自由クロップ（エッジドラッグ）・透視補正/レンズ補正は未実装（警告表示のまま）",
+        text = stringResource(EditorR.string.editor_crop_unimplemented),
         style = MaterialTheme.typography.labelSmall,
         color = EditorPalette.textSecondary,
     )
 }
 
-private fun cropSummary(g: EditRecipe.GeometryParams): String =
+private fun cropSummary(g: EditRecipe.GeometryParams, noneLabel: String): String =
     if (g.cropNorm == EditRecipe.GeometryParams().cropNorm) {
-        "なし（原寸）"
+        noneLabel
     } else {
         g.cropNorm.joinToString(", ") { (it * 100).roundToInt().toString() + "%" }
     }
@@ -799,25 +819,25 @@ private fun cropSummary(g: EditRecipe.GeometryParams): String =
 
 /** タブ自体が未実装の場合の明示表示（ADR-014: 無通知の既定値反映を禁止）。 */
 @Composable
-private fun UnimplementedContent(title: String, message: String) {
+private fun UnimplementedContent(@StringRes titleRes: Int, @StringRes messageRes: Int) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(top = 8.dp),
     ) {
         Text(
-            text = title,
+            text = stringResource(titleRes),
             style = MaterialTheme.typography.titleSmall,
             color = EditorPalette.textPrimary,
         )
         Text(
-            text = "未実装",
+            text = stringResource(EditorR.string.editor_not_implemented),
             style = MaterialTheme.typography.labelMedium,
             color = EditorPalette.accent,
             modifier = Modifier.padding(top = 2.dp),
         )
         Text(
-            text = message,
+            text = stringResource(messageRes),
             style = MaterialTheme.typography.labelSmall,
             color = EditorPalette.textSecondary,
         )
@@ -893,7 +913,15 @@ private fun AdjustmentNumberDialog(
     var errorText by remember { mutableStateOf<String?>(null) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(text = "${id.label} を数値で指定", color = EditorPalette.textPrimary) },
+        title = {
+            Text(
+                text = stringResource(
+                    EditorR.string.editor_number_dialog_title,
+                    stringResource(AdjustmentLabels.labelRes(id)),
+                ),
+                color = EditorPalette.textPrimary,
+            )
+        },
         text = {
             Column {
                 TextField(
@@ -911,7 +939,7 @@ private fun AdjustmentNumberDialog(
                     )
                 }
                 Text(
-                    text = "許容範囲: ${id.min.toInt()} .. ${id.max.toInt()}",
+                    text = stringResource(EditorR.string.editor_number_hint, id.min.toInt(), id.max.toInt()),
                     style = MaterialTheme.typography.labelSmall,
                     color = EditorPalette.textSecondary,
                     modifier = Modifier.padding(top = 8.dp),
@@ -919,35 +947,41 @@ private fun AdjustmentNumberDialog(
             }
         },
         confirmButton = {
+            // 文案は compose コンテキストで先に解決してから onClick へ渡す（ラムダ内は非 composabe）。
+            val msgEmpty = stringResource(EditorR.string.editor_number_error_empty)
+            val msgInvalid = stringResource(EditorR.string.editor_number_error_invalid)
             TextButton(
                 onClick = {
                     val parsed = text.trim().toDoubleOrNull()
                     if (parsed == null) {
-                        errorText = "数値を入力してください"
+                        errorText = msgEmpty
                     } else {
                         val clamped = id.validClamped(parsed)
                         if (clamped == null) {
-                            errorText = "値が不正です"
+                            errorText = msgInvalid
                         } else {
                             onConfirm(clamped)
                         }
                     }
                 },
-            ) { Text("確定") }
+            ) { Text(stringResource(EditorR.string.editor_button_confirm)) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("キャンセル") }
+            TextButton(onClick = onDismiss) { Text(stringResource(EditorR.string.editor_button_cancel)) }
         },
     )
 }
 
-/** スライダーの表示ラベル。単位はスキーマから（UI側の定義重複はしない）。 */
-private fun sliderLabel(id: AdjustmentId): String =
-    when (id.unit) {
-        AdjustmentId.Unit.EV -> "${id.label} (EV)"
-        AdjustmentId.Unit.TEMP_RELATIVE -> "${id.label} −100..100"
-        else -> id.label
+/** スライダーの表示ラベル（文言は res 正本・単位接尾のみスキーマ Unit 列挙に由来）。 */
+@Composable
+private fun sliderLabel(id: AdjustmentId): String {
+    val label = stringResource(AdjustmentLabels.labelRes(id))
+    return when (id.unit) {
+        AdjustmentId.Unit.EV -> stringResource(EditorR.string.editor_slider_ev, label)
+        AdjustmentId.Unit.TEMP_RELATIVE -> stringResource(EditorR.string.editor_slider_temp_relative, label)
+        else -> label
     }
+}
 
 // --------------------------------------------------------------- 下部バー
 
@@ -967,13 +1001,19 @@ private fun EditorBottomBar(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         TextButton(onClick = onUndo, enabled = state.canUndo && !state.dragging) {
-            Text("取り消す", color = if (state.canUndo) EditorPalette.textPrimary else EditorPalette.textSecondary)
+            Text(
+                stringResource(EditorR.string.editor_undo),
+                color = if (state.canUndo) EditorPalette.textPrimary else EditorPalette.textSecondary,
+            )
         }
         TextButton(onClick = onRedo, enabled = state.canRedo && !state.dragging) {
-            Text("やり直す", color = if (state.canRedo) EditorPalette.textPrimary else EditorPalette.textSecondary)
+            Text(
+                stringResource(EditorR.string.editor_redo),
+                color = if (state.canRedo) EditorPalette.textPrimary else EditorPalette.textSecondary,
+            )
         }
         Text(
-            text = "履歴 ${state.history.size}件",
+            text = stringResource(EditorR.string.editor_history_count, state.history.size),
             style = MaterialTheme.typography.labelSmall,
             color = EditorPalette.textSecondary,
             modifier = Modifier.weight(1f),
@@ -991,7 +1031,7 @@ private fun EditorBottomBar(
                 )
             },
         ) {
-            Text("Before/After", color = EditorPalette.textPrimary)
+            Text(stringResource(EditorR.string.editor_button_before_after), color = EditorPalette.textPrimary)
         }
         Button(
             onClick = { onExport(state.assetId) },
@@ -1000,7 +1040,7 @@ private fun EditorBottomBar(
                 contentColor = EditorPalette.bg,
             ),
         ) {
-            Text("書き出し…")
+            Text(stringResource(EditorR.string.editor_export))
         }
     }
 }

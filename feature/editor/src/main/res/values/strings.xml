@@ -1,0 +1,147 @@
+<resources>
+    <!-- PR-27 G1: feature:editor の文言正本。既定（ja）。en は別 PR。 -->
+    <!-- ここにはスライダー（AdjustmentId 34 項）と HSL バンド/パラメータ（8+3 項）の表示ラベルを含む。
+         core:model（AdjustmentId/EditNodeSpecs）はラベルを持たない（純 Kotlin・PR-27 で移設）。 -->
+
+    <!-- 上部バー・プレビュー -->
+    <string name="editor_loading_title">写真を読み込み中…</string>
+    <string name="editor_revision">改訂 r%1$d</string>
+    <string name="editor_save_saving">保存中…</string>
+    <string name="editor_save_saved">保存済み</string>
+    <string name="editor_save_failed">保存に失敗</string>
+    <string name="editor_cd_before_preview">Before（既定値）プレビュー</string>
+    <string name="editor_cd_preview">編集プレビュー</string>
+    <string name="editor_generating_preview">プレビューを生成中…</string>
+    <string name="editor_badge_before">Before（既定値）</string>
+    <string name="editor_button_before_after">Before/After</string>
+    <string name="editor_render_failed_title">描画に失敗しました</string>
+
+    <!-- タブ -->
+    <string name="editor_tab_basic">基本調整</string>
+    <string name="editor_tab_curve">カーブ</string>
+    <string name="editor_tab_hsl">HSL</string>
+    <string name="editor_tab_geometry">ジオメトリ</string>
+    <string name="editor_tab_detail">ディテール</string>
+    <string name="editor_tab_local">局部補正</string>
+    <string name="editor_tab_hint_curve">R/G/B チャンネル別は未実装（master のみ）</string>
+    <string name="editor_tab_hint_geometry">自由角度・自由クロップ・透視/レンズは未実装</string>
+    <string name="editor_tab_hint_detail">未実装（M2 予約）</string>
+    <string name="editor_tab_hint_local">未実装（M3 予約）</string>
+    <string name="editor_not_implemented">未実装</string>
+    <string name="editor_detail_title">ディテール（シャープ/ノイズ低減）</string>
+    <string name="editor_detail_notice">M2 予約。現在のビルドには含まれず、レシピに値があっても適用されません（警告表示）。</string>
+    <string name="editor_local_title">局部補正（マスク）</string>
+    <string name="editor_local_notice">M3 予約。現在のビルドには含まれず、レシピにマスクがあっても適用されません（警告表示）。</string>
+
+    <!-- 履歴 -->
+    <string name="editor_history_open">履歴を閉じる（%1$d件）</string>
+    <string name="editor_history_closed">履歴を表示（%1$d件）</string>
+    <string name="editor_history_empty">確定済みの操作はまだありません</string>
+    <string name="editor_history_count">履歴 %1$d件</string>
+
+    <!-- 基本調整タブ -->
+    <string name="editor_drag_quality">ドラッグ中: 低解像度 / 離す: 高解像度</string>
+    <string name="editor_slider_ev">%1$s (EV)</string>
+    <string name="editor_slider_temp_relative">%1$s −100..100</string>
+
+    <!-- カーブタブ -->
+    <string name="editor_curve_title">カーブ（master）</string>
+    <string name="editor_curve_reset">中立へ戻す</string>
+    <string name="editor_curve_help">ドラッグ: 点を移動 / タップ: 点を追加 / ダブルタップ: 点を削除</string>
+    <string name="editor_curve_points">制御点 %1$d/%2$d（最小 %3$d）</string>
+    <string name="editor_curve_channels_hint">R/G/B チャンネル別カーブは未実装（master のみ。チャンネル指定はレシピに値があれば警告表示）</string>
+
+    <!-- HSL タブ -->
+    <string name="editor_hsl_title">HSL カラーミキサー（標準8系統）</string>
+    <string name="editor_hsl_legend">色相 ±100 = ±30° / 彩度・明るさは −100..100（明るさは線形光で 2^v 増幅）</string>
+
+    <!-- ジオメトリタブ -->
+    <string name="editor_geometry_title">ジオメトリ</string>
+    <string name="editor_rotate_left">⟲ 90°左回転</string>
+    <string name="editor_rotate_right">⟳ 90°右回転</string>
+    <string name="editor_flip_h_on">水平反転: ON</string>
+    <string name="editor_flip_h_off">水平反転: OFF</string>
+    <string name="editor_flip_v_on">垂直反転: ON</string>
+    <string name="editor_flip_v_off">垂直反転: OFF</string>
+    <string name="editor_geometry_status">現在: 回転%1$d° / クロップ %2$s</string>
+    <string name="editor_crop_header">クロップ（中央寄せ・プリセット比。クロップ縦横比は 90/270°回転時に自動で入れ替える）</string>
+    <string name="editor_crop_original">原寸</string>
+    <string name="editor_crop_unimplemented">自由角度回転・自由クロップ（エッジドラッグ）・透視補正/レンズ補正は未実装（警告表示のまま）</string>
+    <string name="editor_crop_none">なし（原寸）</string>
+
+    <!-- 数値入力ダイアログ・下部バー -->
+    <string name="editor_number_dialog_title">%1$s を数値で指定</string>
+    <string name="editor_number_hint">許容範囲: %1$d .. %2$d</string>
+    <string name="editor_number_error_empty">数値を入力してください</string>
+    <string name="editor_number_error_invalid">値が不正です</string>
+    <string name="editor_button_confirm">確定</string>
+    <string name="editor_button_cancel">キャンセル</string>
+    <string name="editor_undo">取り消す</string>
+    <string name="editor_redo">やり直す</string>
+    <string name="editor_export">書き出し…</string>
+
+    <!-- ViewModel メッセージ -->
+    <string name="editor_msg_document_load_failed">編集文書の読み込みに失敗</string>
+    <string name="editor_msg_doc_not_loaded">編集文書が未ロード</string>
+    <string name="editor_history_op_apply">変更</string>
+    <string name="editor_history_op_undo">取り消し</string>
+    <string name="editor_history_op_redo">やり直し</string>
+    <string name="editor_history_curve">%1$s: マスターカーブ %2$d点</string>
+    <string name="editor_history_geometry_plain">%1$s: ジオメトリ</string>
+    <string name="editor_history_geometry">%1$s: ジオメトリ（%2$s）</string>
+    <string name="editor_history_by_path">%1$s %2$s</string>
+    <string name="editor_history_slider">%1$s: %2$s %3$s</string>
+    <string name="editor_history_flip_h">水平反転</string>
+    <string name="editor_history_flip_v">垂直反転</string>
+    <string name="editor_history_crop">クロップ</string>
+    <string name="editor_history_rotation">回転%1$d°</string>
+
+    <!-- スライダー表示ラベル（AdjustmentId の正本写像・feature:editor res）。 -->
+    <string name="editor_adjust_exposure">露出</string>
+    <string name="editor_adjust_contrast">コントラスト</string>
+    <string name="editor_adjust_highlights">ハイライト</string>
+    <string name="editor_adjust_shadows">シャドウ</string>
+    <string name="editor_adjust_whites">白レベル</string>
+    <string name="editor_adjust_blacks">黒レベル</string>
+    <string name="editor_adjust_vibrance">自然な彩度</string>
+    <string name="editor_adjust_saturation">彩度</string>
+    <string name="editor_adjust_temperature">温度</string>
+    <string name="editor_adjust_tint">色合い</string>
+    <string name="editor_adjust_hsl_red_hue">赤 色相</string>
+    <string name="editor_adjust_hsl_red_sat">赤 彩度</string>
+    <string name="editor_adjust_hsl_red_lum">赤 明るさ</string>
+    <string name="editor_adjust_hsl_orange_hue">オレンジ 色相</string>
+    <string name="editor_adjust_hsl_orange_sat">オレンジ 彩度</string>
+    <string name="editor_adjust_hsl_orange_lum">オレンジ 明るさ</string>
+    <string name="editor_adjust_hsl_yellow_hue">黄 色相</string>
+    <string name="editor_adjust_hsl_yellow_sat">黄 彩度</string>
+    <string name="editor_adjust_hsl_yellow_lum">黄 明るさ</string>
+    <string name="editor_adjust_hsl_green_hue">緑 色相</string>
+    <string name="editor_adjust_hsl_green_sat">緑 彩度</string>
+    <string name="editor_adjust_hsl_green_lum">緑 明るさ</string>
+    <string name="editor_adjust_hsl_aqua_hue">水 色相</string>
+    <string name="editor_adjust_hsl_aqua_sat">水 彩度</string>
+    <string name="editor_adjust_hsl_aqua_lum">水 明るさ</string>
+    <string name="editor_adjust_hsl_blue_hue">青 色相</string>
+    <string name="editor_adjust_hsl_blue_sat">青 彩度</string>
+    <string name="editor_adjust_hsl_blue_lum">青 明るさ</string>
+    <string name="editor_adjust_hsl_purple_hue">紫 色相</string>
+    <string name="editor_adjust_hsl_purple_sat">紫 彩度</string>
+    <string name="editor_adjust_hsl_purple_lum">紫 明るさ</string>
+    <string name="editor_adjust_hsl_magenta_hue">マゼンタ 色相</string>
+    <string name="editor_adjust_hsl_magenta_sat">マゼンタ 彩度</string>
+    <string name="editor_adjust_hsl_magenta_lum">マゼンタ 明るさ</string>
+
+    <!-- HSL バンド名・パラメータ名（EditNodeSpecs.HSL_BANDS/HSL_PARAMS の表示写像） -->
+    <string name="editor_hsl_band_red">赤</string>
+    <string name="editor_hsl_band_orange">オレンジ</string>
+    <string name="editor_hsl_band_yellow">黄</string>
+    <string name="editor_hsl_band_green">緑</string>
+    <string name="editor_hsl_band_aqua">水</string>
+    <string name="editor_hsl_band_blue">青</string>
+    <string name="editor_hsl_band_purple">紫</string>
+    <string name="editor_hsl_band_magenta">マゼンタ</string>
+    <string name="editor_hsl_param_hue">色相</string>
+    <string name="editor_hsl_param_sat">彩度</string>
+    <string name="editor_hsl_param_lum">明るさ</string>
+</resources>

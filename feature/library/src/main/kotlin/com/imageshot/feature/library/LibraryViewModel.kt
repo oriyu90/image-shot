@@ -10,10 +10,12 @@ import com.imageshot.core.model.ErrorCode
 import com.imageshot.core.model.ImageOpResult
 import com.imageshot.core.model.ImportPolicy
 import com.imageshot.core.model.ImportProbe
+import com.imageshot.core.model.Strings
 import com.imageshot.core.storage.ImportRepository
 import com.imageshot.core.storage.ThumbnailGenerator
 import com.imageshot.core.storage.ThumbnailSeed
 import com.imageshot.core.storage.UriAccessibility
+import com.imageshot.feature.library.R as LibraryR
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -42,6 +44,8 @@ class LibraryViewModel(
     private val importRepository: ImportRepository,
     /** サムネイル生成パイプライン（PR-8）。生成はこの VM スコープの単一ジョブからのみ駆動する。 */
     private val thumbnails: ThumbnailGenerator,
+    /** 文言取得（PR-27 G1）。app 層が Context.getString を結線する。VM 内での日本語リテラルは持たない。 */
+    private val strings: Strings,
 ) : ViewModel() {
 
     /** ローカル検索・ソートのMVP範囲（撮影日順/表示名順のみ。M2: メタデータ検索）。 */
@@ -177,11 +181,11 @@ class LibraryViewModel(
         when (val r = importRepository.inspect(android.net.Uri.parse(uri))) {
         is ImageOpResult.Success -> r.value
         is ImageOpResult.Failure -> {
-            appendMessage("検査失敗: ${r.code}")
+            appendMessage(strings.get(LibraryR.string.library_msg_inspect_failed, r.code.name))
             null
         }
         is ImageOpResult.Degraded -> {
-            appendMessage("検査警告: ${r.code}")
+            appendMessage(strings.get(LibraryR.string.library_msg_inspect_alert, r.code.name))
             r.value
         }
     }
@@ -209,7 +213,7 @@ class LibraryViewModel(
         } finally {
             importing.value = false
         }
-        appendMessage("取り込み完了: $ok / ${uris.size} 件（非対応候補・失敗は上記に明示）")
+        appendMessage(strings.get(LibraryR.string.library_msg_import_batch_done, ok, uris.size))
         return ok
     }
 
@@ -221,16 +225,16 @@ class LibraryViewModel(
         val tree = Uri.parse(treeUri)
         val grant = importRepository.takePersistableReadGrant(tree)
         if (grant is ImageOpResult.Failure) {
-            appendMessage("フォルダー権限の永続化に失敗: ${grant.code}（このセッションのみ有効）")
+            appendMessage(strings.get(LibraryR.string.library_msg_tree_grant_failed, grant.code.name))
         }
         when (val listing = importRepository.listImagesInTree(tree)) {
             is ImageOpResult.Failure -> appendMessage(
-                "フォルダー走査失敗: ${listing.code} ${listing.detail.orEmpty()}",
+                strings.get(LibraryR.string.library_msg_tree_scan_failed, listing.code.name, listing.detail.orEmpty()),
             )
-            is ImageOpResult.Degraded -> appendMessage("フォルダー走査警告: ${listing.warnings}")
+            is ImageOpResult.Degraded -> appendMessage(strings.get(LibraryR.string.library_msg_tree_scan_alert, listing.warnings))
             is ImageOpResult.Success -> {
                 if (listing.value.isEmpty()) {
-                    appendMessage("対象画像がフォルダー直下に見つかりません（サブフォルダーは未走査）")
+                    appendMessage(strings.get(LibraryR.string.library_msg_tree_empty))
                 } else {
                     // 子documentは tree grant で読めるため、個別の persist 取得は行わない。
                     importUris(listing.value, usePersistPermission = false)
@@ -265,9 +269,11 @@ class LibraryViewModel(
                 }
             }
             if (revoked > 0 || disconnected > 0) {
-                appendMessage("URI失効: 権限失効 ${revoked}件 / 切断 ${disconnected}件 → セルの「再関連付け」から復旧")
+                appendMessage(
+                    strings.get(LibraryR.string.library_msg_sweep_found, revoked, disconnected),
+                )
             } else {
-                appendMessage("可用性確認: ${assets.size}件 すべて接続（回復 ${recovered}件）")
+                appendMessage(strings.get(LibraryR.string.library_msg_sweep_ok, assets.size, recovered))
             }
         } finally {
             sweeping.value = false
@@ -283,40 +289,40 @@ class LibraryViewModel(
     suspend fun relink(assetId: String, newUri: String, persistPermission: Boolean = true): RelinkResult {
         val entity = assetDao.get(assetId)
             ?: return RelinkResult.Failed(ErrorCode.URI_REVOKED, "asset not found: $assetId").also {
-                appendMessage("再関連付け失敗: 対象が見つかりません")
+                appendMessage(strings.get(LibraryR.string.library_msg_relink_missing))
             }
 
         val warnings = mutableListOf<String>()
         val fingerprint = when (val fp = importRepository.computeFingerprint(Uri.parse(newUri))) {
             is ImageOpResult.Success -> fp.value
             is ImageOpResult.Failure -> return RelinkResult.Failed(fp.code, fp.detail).also {
-                appendMessage("再関連付け失敗: ${fp.code} ${fp.detail.orEmpty()}")
+                appendMessage(strings.get(LibraryR.string.library_msg_relink_failed, fp.code.name, fp.detail.orEmpty()))
             }
             is ImageOpResult.Degraded -> fp.value
         }
 
         val stored = entity.imageFingerprint
         if (stored != null && stored != fingerprint) {
-            appendMessage("再関連付け失敗: 選択ファイルが原本と一致しません（sha-256 照合不一致）")
+            appendMessage(strings.get(LibraryR.string.library_msg_relink_mismatch))
             return RelinkResult.FingerprintMismatch(
                 "stored=$stored chosen=$fingerprint",
             )
         }
         if (stored == null) {
-            warnings.add("旧指紋が未計算のため同じ写真か照合できませんでした（登録時に遅延計画）")
+            warnings.add(strings.get(LibraryR.string.library_warn_fingerprint_uncomputed))
         }
 
         var grantOk = true
         if (persistPermission) {
             grantOk = importRepository.takePersistableReadGrant(Uri.parse(newUri)) is ImageOpResult.Success
             if (!grantOk) {
-                warnings.add("persistable permission が取得できません（再起動後は再度関連付けが必要）")
+                warnings.add(strings.get(LibraryR.string.library_warn_permission_not_persisted))
             }
         }
         assetDao.updateSourceUri(assetId, newUri, Asset.AVAILABILITY_OK)
         assetDao.updateFingerprint(assetId, stored ?: fingerprint)
 
-        appendMessage("再関連付け完了: ${entity.displayName}")
+        appendMessage(strings.get(LibraryR.string.library_msg_relink_ok, entity.displayName))
         return RelinkResult.Relinked(assetId, warnings)
     }
 
@@ -329,7 +335,7 @@ class LibraryViewModel(
             for (asset in assetDao.findPendingFingerprint()) {
                 when (val r = importRepository.ensureFingerprint(asset.id)) {
                     is ImageOpResult.Failure -> appendMessage(
-                        "指紋計算に失敗: ${asset.displayName} (${r.code})",
+                        strings.get(LibraryR.string.library_msg_fingerprint_failed, asset.displayName, r.code.name),
                     )
                     else -> Unit
                 }
@@ -350,14 +356,16 @@ class LibraryViewModel(
         val result = importRepository.register(Uri.parse(uri), policy)
         when (result) {
             is ImageOpResult.Success -> {
-                appendMessage("取り込みOK: ${labelOr(uri)}")
+                appendMessage(strings.get(LibraryR.string.library_msg_import_one_ok, labelOr(uri)))
                 scheduleFingerprintBackfill(result.value)
             }
             is ImageOpResult.Failure -> appendMessage(
-                "取り込み失敗: ${labelOr(uri)} → ${result.code} ${result.detail.orEmpty()}",
+                strings.get(LibraryR.string.library_msg_import_one_failed, labelOr(uri), result.code.name, result.detail.orEmpty()),
             )
             is ImageOpResult.Degraded -> {
-                appendMessage("取り込み警告: ${labelOr(uri)} → ${result.warnings.joinToString(" / ")}")
+                appendMessage(
+                    strings.get(LibraryR.string.library_msg_import_one_alert, labelOr(uri), result.warnings.joinToString(" / ")),
+                )
                 scheduleFingerprintBackfill(result.value)
             }
         }
@@ -369,7 +377,7 @@ class LibraryViewModel(
         viewModelScope.launch {
             when (val r = importRepository.ensureFingerprint(assetId)) {
                 is ImageOpResult.Failure -> appendMessage(
-                    "指紋の遅延計算に失敗: ${r.code} ${r.detail.orEmpty()}",
+                    strings.get(LibraryR.string.library_msg_fingerprint_backfill_failed, r.code.name, r.detail.orEmpty()),
                 )
                 else -> Unit
             }

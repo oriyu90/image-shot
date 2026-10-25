@@ -9,6 +9,7 @@ import com.imageshot.core.database.EditStore
 import com.imageshot.core.database.ImageShotDatabase
 import com.imageshot.core.database.RoomEditStoreBackend
 import com.imageshot.core.model.Asset
+import com.imageshot.core.model.Strings
 import com.imageshot.core.render.ExportBitmapRenderer
 import com.imageshot.core.render.PhotoRenderer
 import com.imageshot.core.render.RenderBitmapStore
@@ -72,6 +73,12 @@ class AppContainer(context: Context) {
 
     /** WorkManager 実働。ジョブ永続化は WorkManager 自身の制約（ADR-010）。 */
     val exportScheduler = WorkManagerExportJobScheduler(WorkManager.getInstance(context))
+
+    /**
+     * 文言取得（PR-27 G1）。feature VM は Context を保持しないため、この取得関数のみを
+     *注入する（実体は application context の getString・書式引数は platform フォーマッタ）。
+     */
+    val strings: Strings = Strings { resId, args -> context.getString(resId, *args) }
 
     /** プロセス生存中の非UI処理用スコープ（起動復旧走査）。画面側からは結合しない。 */
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)

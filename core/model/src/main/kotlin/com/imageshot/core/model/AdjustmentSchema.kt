@@ -9,8 +9,13 @@ import kotlin.math.abs
  * 調整スライダーの単一正本スキーマ（01_製品仕様書.md §5.1
  * 「個別スライダーは物理単位・正規化範囲・既定値をコードの単一スキーマで定義」）。
  *
- * - UI（ラベル・範囲・既定値・刻み）と、レシピ適用（[apply]）と、履歴イベントの
- *   payload 変換がすべてこのオブジェクトから導出される。UI と処理系での定義重複を禁止する。
+ * - UI（範囲・既定値・刻み）と、レシピ適用（[apply]）と、履歴イベントの
+ *   payload 変換がすべてこのオブジェクトから導出される。
+ *   表示ラベルだけは例外（PR-27 G1 確定・ADR-014 前提の再編）: 本モジュールは
+ *   Android リソースを持たない（02 §2 純 Kotlin）ため、**文言は feature:editor の
+ *   strings.xml に正本を置く**（[com.imageshot.feature.editor.AdjustmentLabels] が
+ *   id→res 対応の唯一の写像・コード側ラベルは存在しない）。範囲/既定/刻みの正本性は
+ *   変わらないため「UI と処理系の定義重複禁止」はこの形態で維持する。
  * - レシピへの書込み単位: tone/color 系は -1.0..1.0 に正規化、[EXPOSURE] は EV（-5..+5）、
  *   [TEMPERATURE] は絶対 K（2000..12000, スライダー0 = as-shot = null）。
  *   [TINT] は近似単位（-1..1）として保存する（§5.1 の K/相対混在禁止を踏まえ
@@ -20,7 +25,6 @@ import kotlin.math.abs
 enum class AdjustmentId(
     /** EditRecipe 内の正本パス。履歴イベント payload の "path" も同一の値を使う。 */
     val recipePath: String,
-    val label: String,
     val min: Double,
     val max: Double,
     val default: Double,
@@ -29,40 +33,40 @@ enum class AdjustmentId(
     /** このスライダーが属するイベント種別（ADR-022 正本列挙）。 */
     val kind: EditEventKind,
 ) {
-    EXPOSURE("develop.tone.exposureEv", "露出", -5.0, 5.0, 0.0, 0.05, Unit.EV, EditEventKind.TONE),
-    CONTRAST("develop.tone.contrast", "コントラスト", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.TONE),
-    HIGHLIGHTS("develop.tone.highlights", "ハイライト", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.TONE),
-    SHADOWS("develop.tone.shadows", "シャドウ", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.TONE),
-    WHITES("develop.tone.whites", "白レベル", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.TONE),
-    BLACKS("develop.tone.blacks", "黒レベル", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.TONE),
-    VIBRANCE("develop.color.vibrance", "自然な彩度", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.COLOR),
-    SATURATION("develop.color.saturation", "彩度", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.COLOR),
-    TEMPERATURE("develop.whiteBalance.tempKelvin", "温度", -100.0, 100.0, 0.0, 1.0, Unit.TEMP_RELATIVE, EditEventKind.WHITE_BALANCE),
-    TINT("develop.whiteBalance.tint", "色合い", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.WHITE_BALANCE),
-    HSL_RED_HUE("develop.color.hsl.red.hue", "赤 色相", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
-    HSL_RED_SAT("develop.color.hsl.red.sat", "赤 彩度", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
-    HSL_RED_LUM("develop.color.hsl.red.lum", "赤 明るさ", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
-    HSL_ORANGE_HUE("develop.color.hsl.orange.hue", "オレンジ 色相", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
-    HSL_ORANGE_SAT("develop.color.hsl.orange.sat", "オレンジ 彩度", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
-    HSL_ORANGE_LUM("develop.color.hsl.orange.lum", "オレンジ 明るさ", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
-    HSL_YELLOW_HUE("develop.color.hsl.yellow.hue", "黄 色相", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
-    HSL_YELLOW_SAT("develop.color.hsl.yellow.sat", "黄 彩度", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
-    HSL_YELLOW_LUM("develop.color.hsl.yellow.lum", "黄 明るさ", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
-    HSL_GREEN_HUE("develop.color.hsl.green.hue", "緑 色相", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
-    HSL_GREEN_SAT("develop.color.hsl.green.sat", "緑 彩度", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
-    HSL_GREEN_LUM("develop.color.hsl.green.lum", "緑 明るさ", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
-    HSL_AQUA_HUE("develop.color.hsl.aqua.hue", "水 色相", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
-    HSL_AQUA_SAT("develop.color.hsl.aqua.sat", "水 彩度", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
-    HSL_AQUA_LUM("develop.color.hsl.aqua.lum", "水 明るさ", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
-    HSL_BLUE_HUE("develop.color.hsl.blue.hue", "青 色相", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
-    HSL_BLUE_SAT("develop.color.hsl.blue.sat", "青 彩度", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
-    HSL_BLUE_LUM("develop.color.hsl.blue.lum", "青 明るさ", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
-    HSL_PURPLE_HUE("develop.color.hsl.purple.hue", "紫 色相", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
-    HSL_PURPLE_SAT("develop.color.hsl.purple.sat", "紫 彩度", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
-    HSL_PURPLE_LUM("develop.color.hsl.purple.lum", "紫 明るさ", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
-    HSL_MAGENTA_HUE("develop.color.hsl.magenta.hue", "マゼンタ 色相", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
-    HSL_MAGENTA_SAT("develop.color.hsl.magenta.sat", "マゼンタ 彩度", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
-    HSL_MAGENTA_LUM("develop.color.hsl.magenta.lum", "マゼンタ 明るさ", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
+    EXPOSURE("develop.tone.exposureEv", -5.0, 5.0, 0.0, 0.05, Unit.EV, EditEventKind.TONE),
+    CONTRAST("develop.tone.contrast", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.TONE),
+    HIGHLIGHTS("develop.tone.highlights", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.TONE),
+    SHADOWS("develop.tone.shadows", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.TONE),
+    WHITES("develop.tone.whites", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.TONE),
+    BLACKS("develop.tone.blacks", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.TONE),
+    VIBRANCE("develop.color.vibrance", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.COLOR),
+    SATURATION("develop.color.saturation", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.COLOR),
+    TEMPERATURE("develop.whiteBalance.tempKelvin", -100.0, 100.0, 0.0, 1.0, Unit.TEMP_RELATIVE, EditEventKind.WHITE_BALANCE),
+    TINT("develop.whiteBalance.tint", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.WHITE_BALANCE),
+    HSL_RED_HUE("develop.color.hsl.red.hue", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
+    HSL_RED_SAT("develop.color.hsl.red.sat", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
+    HSL_RED_LUM("develop.color.hsl.red.lum", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
+    HSL_ORANGE_HUE("develop.color.hsl.orange.hue", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
+    HSL_ORANGE_SAT("develop.color.hsl.orange.sat", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
+    HSL_ORANGE_LUM("develop.color.hsl.orange.lum", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
+    HSL_YELLOW_HUE("develop.color.hsl.yellow.hue", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
+    HSL_YELLOW_SAT("develop.color.hsl.yellow.sat", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
+    HSL_YELLOW_LUM("develop.color.hsl.yellow.lum", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
+    HSL_GREEN_HUE("develop.color.hsl.green.hue", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
+    HSL_GREEN_SAT("develop.color.hsl.green.sat", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
+    HSL_GREEN_LUM("develop.color.hsl.green.lum", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
+    HSL_AQUA_HUE("develop.color.hsl.aqua.hue", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
+    HSL_AQUA_SAT("develop.color.hsl.aqua.sat", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
+    HSL_AQUA_LUM("develop.color.hsl.aqua.lum", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
+    HSL_BLUE_HUE("develop.color.hsl.blue.hue", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
+    HSL_BLUE_SAT("develop.color.hsl.blue.sat", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
+    HSL_BLUE_LUM("develop.color.hsl.blue.lum", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
+    HSL_PURPLE_HUE("develop.color.hsl.purple.hue", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
+    HSL_PURPLE_SAT("develop.color.hsl.purple.sat", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
+    HSL_PURPLE_LUM("develop.color.hsl.purple.lum", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
+    HSL_MAGENTA_HUE("develop.color.hsl.magenta.hue", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
+    HSL_MAGENTA_SAT("develop.color.hsl.magenta.sat", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
+    HSL_MAGENTA_LUM("develop.color.hsl.magenta.lum", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
     ;
 
     enum class Unit(val display: String) {

@@ -20,8 +20,10 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.key
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.imageshot.core.model.ExportProgress
+import com.imageshot.feature.export.R as ExportR
 
 /**
  * 書き出し画面（M1）。
@@ -49,19 +51,14 @@ fun ExportScreen(
             .verticalScroll(rememberScrollState())
             .padding(12.dp),
     ) {
-        Text("書き出し", style = MaterialTheme.typography.titleLarge)
+        Text(stringResource(ExportR.string.export_title), style = MaterialTheme.typography.titleLarge)
         Text(
-            // 旧文言「WorkManager 連携は Sprint C」は実働済みのため撤去。現状を正確に。
-            "ジョブの実処理は WorkManager（ADR-010）。登録後は QUEUED → PREPARING → " +
-                "RENDERING → ENCODING → VERIFYING → PUBLISHING → COMPLETE の二段階コミットで進行し、" +
-                "部分出力は完了扱いされません。",
+            stringResource(ExportR.string.export_pipeline_note),
             style = MaterialTheme.typography.labelSmall,
         )
         Text(
-            "※ 未対応（ADR-014）: EXIF pass-through 未実装（入力 EXIF は書き込まない。出力 ICC は " +
-                "platform エンコーダが付与: 2026-10-19 実機実測）。RAW/TIFF 書き出しは非対応。" +
-                "ジョブ設定正本はキャッシュ領域の request ファイルのため、キャッシュ消去で" +
-                "FAILED_PERMANENT になります（再設定が必要）。",
+            // PR-23 実装後の現実を反映（旧「EXIF pass-through 未実装」文言は撤去）。
+            stringResource(ExportR.string.export_support_note),
             style = MaterialTheme.typography.labelSmall,
         )
 
@@ -92,7 +89,7 @@ fun ExportScreen(
                     settings.document != null &&
                     !settings.enqueuing,
             ) {
-                Text(if (settings.enqueuing) "登録中…" else "書き出しを開始")
+                Text(stringResource(if (settings.enqueuing) ExportR.string.export_enqueuing else ExportR.string.export_button_enqueue))
             }
         }
 
@@ -105,21 +102,19 @@ fun ExportScreen(
 private fun TargetDocumentRow(document: ExportViewModel.DocumentInfo?, error: String?) {
     when {
         error != null -> {
-            Text("編集文書の読み込みに失敗", style = MaterialTheme.typography.bodySmall)
+            Text(stringResource(ExportR.string.export_document_error_head), style = MaterialTheme.typography.bodySmall)
             Text(error, style = MaterialTheme.typography.labelSmall)
         }
-        document == null -> Text("読み込み中…", style = MaterialTheme.typography.bodySmall)
+        document == null -> Text(stringResource(ExportR.string.export_document_loading), style = MaterialTheme.typography.bodySmall)
         else -> {
-            val summary = buildString {
-                append("文書 ")
-                append(document.documentId.take(8))
-                append("… rev")
-                append(document.recipeRevision)
-                append(" / スライダー変更 ")
-                append(document.nonDefaultSliderCount)
-                append("件")
-                if (document.hasCurve) append(" / トーンカーブあり")
-            }
+            // 文言は res（export_document_summary）。連結部（hasCurve 抜けなし）も res 参照のみ。
+            val summary = stringResource(
+                ExportR.string.export_document_summary,
+                document.documentId.take(8),
+                document.recipeRevision,
+                document.nonDefaultSliderCount,
+                if (document.hasCurve) stringResource(ExportR.string.export_document_has_curve) else "",
+            )
             Text(summary, style = MaterialTheme.typography.bodySmall)
         }
     }
@@ -131,7 +126,7 @@ private fun FormatSelector(
     onFormatSelected: (ExportFormat) -> Unit,
 ) {
     Column(Modifier.padding(vertical = 4.dp)) {
-        Text("形式", style = MaterialTheme.typography.labelLarge)
+        Text(stringResource(ExportR.string.export_format), style = MaterialTheme.typography.labelLarge)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             ExportFormat.entries.forEach { candidate ->
                 FilterChip(
@@ -152,10 +147,10 @@ private fun QualitySection(
 ) {
     Column(Modifier.padding(vertical = 4.dp)) {
         if (format === ExportFormat.PNG) {
-            Text("画質", style = MaterialTheme.typography.labelLarge)
-            Text("PNG（可逆）では画質設定は N/A", style = MaterialTheme.typography.bodySmall)
+            Text(stringResource(ExportR.string.export_quality), style = MaterialTheme.typography.labelLarge)
+            Text(stringResource(ExportR.string.export_quality_png_note), style = MaterialTheme.typography.bodySmall)
         } else {
-            Text("画質: $quality", style = MaterialTheme.typography.labelLarge)
+            Text(stringResource(ExportR.string.export_quality_value, quality), style = MaterialTheme.typography.labelLarge)
             Slider(
                 value = quality.toFloat(),
                 onValueChange = { onQualityChanged(it.toInt()) },
@@ -187,14 +182,14 @@ private fun DestinationSection(
         )
         Column(Modifier.padding(vertical = 4.dp)) {
             Text(
-                text = when (val shown = destinationUri?.let { Uri.parse(it).lastPathSegment }) {
-                    null -> "出力先: 未選択"
-                    else -> "出力先: $shown"
-                },
+                text = stringResource(
+                    if (destinationUri == null) ExportR.string.export_destination_none else ExportR.string.export_destination,
+                    destinationUri?.let { Uri.parse(it).lastPathSegment } ?: "",
+                ),
                 style = MaterialTheme.typography.bodySmall,
             )
             Button(onClick = { launcher.launch(suggestedName) }) {
-                Text("出力先を選択…")
+                Text(stringResource(ExportR.string.export_destination_pick))
             }
         }
     }
@@ -203,9 +198,9 @@ private fun DestinationSection(
 @Composable
 private fun JobsSection(jobs: List<ExportProgress>) {
     Column(Modifier.padding(top = 4.dp)) {
-        Text("ジョブ一覧", style = MaterialTheme.typography.labelLarge)
+        Text(stringResource(ExportR.string.export_jobs_title), style = MaterialTheme.typography.labelLarge)
         if (jobs.isEmpty()) {
-            Text("ジョブはありません", style = MaterialTheme.typography.bodySmall)
+            Text(stringResource(ExportR.string.export_jobs_empty), style = MaterialTheme.typography.bodySmall)
         }
         if (jobs.isNotEmpty()) {
             // 縦スクロール可能な親 Column 内のため LazyColumn は不可（無限高さ制約違反）。
@@ -221,7 +216,7 @@ private fun JobsSection(jobs: List<ExportProgress>) {
                         modifier = Modifier.fillMaxWidth(),
                     )
                     job.errorCode?.let {
-                        Text("エラー: $it", style = MaterialTheme.typography.labelSmall)
+                        Text(stringResource(ExportR.string.export_job_error, it.name), style = MaterialTheme.typography.labelSmall)
                     }
                     Spacer(Modifier.padding(2.dp))
                 }

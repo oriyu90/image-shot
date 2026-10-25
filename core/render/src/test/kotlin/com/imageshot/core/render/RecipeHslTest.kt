@@ -156,7 +156,7 @@ class RecipeHslTest {
     @Test
     fun extremeParams_noNonFinite() {
         val params = mutableMapOf<String, Double>()
-        EditNodeSpecs.HSL_BANDS.forEachIndexed { i, (band, _) ->
+        EditNodeSpecs.HSL_BANDS.forEachIndexed { i, band ->
             when (i % 3) {
                 0 -> params["${band}.hue"] = 1.0
                 1 -> params["${band}.sat"] = -1.0
