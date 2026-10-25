@@ -135,7 +135,7 @@
 - **設計（[計画]）**:
   1. `SourceDecode` の Result に `hasGainmap: Boolean` を追加（[実測] Gainmap は ImageDecoder decode で Bitmap に付くため検出は decode 後・**DB schema 変更なし**（schema は PR-29 でも payload JSON 方式のため変更しない・schema v1 継続）。
   2. `ExportRenderer`: ADR-026 の policy 分岐。案 B 採用時は乗算型判定を `RecipeToneCurve` の 乗算型フィルタの型分類（WB/露出系のみ stage-1 の保全対象）を明示。
-  3. **B2 EXIF**: 書き出し時に `ExifInterface`（既存依存 1.4.1）で whitelist copy（Make/Model/LensModel/DateTime/DateTimeOriginal/FNumber/ISO/FocalLength/ExposureTime・orientation は正立済みのため 1 を書き込み・GeoTag は権利上書かない（既定 OFF・台帳に記録）。`hasGainmap=false` 化の出力では XMP `hdrgm`/GainMap 系も剥がす。
+  3. **B2 EXIF**: 書き出し時に `ExifInterface`（既存依存 **1.4.2**〔[実測] 2026-10-25: `saveAttributes()` が UltraHDR の APP2/XMP/hdrgm/ISO 21496/MPF マーカを共存させる。androidx 定数名正本: TAG_ISO_SPEED_RATINGS・ORIENTATION 等〕）で whitelist copy（Make/Model/LensModel/DateTime/DateTimeOriginal/FNumber/**ISO〔TAG_ISO_SPEED_RATINGS〕**/FocalLength/ExposureTime・orientation は正立済みのため 1 を書き込み・GeoTag は権利上書かない（既定 OFF・台帳に記録）。`hasGainmap=false` 化の出力では XMP `hdrgm`/GainMap 系も剥がす。
   4. UI 警告文言（ADR-014 型）の整備（stage-1 policy 整合）。
 - **テスト**: JVM: whitelist copy の純ロジック/除外タグ検証。androidTest: EXIF 付与後の読み戻し・gainmap policy 両案・全回帰（golden 3・8 DB・kill 30）。
 - **受入条件**: policy 分岐の実機確認・EXIF 読み戻しの台帳記録・golden ΔE 回帰なし。

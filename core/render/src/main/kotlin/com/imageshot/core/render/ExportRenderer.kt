@@ -32,13 +32,20 @@ import kotlinx.coroutines.withContext
  * - 入力 ICC: SourceDecode（ImageDecoder setTargetColorSpace）で sRGB への出力変換を要求し、
  *   デコード後の実測（bitmap.colorSpace 照合）で検証できた場合のみ「変換済み」の警告文にする
  *   （検証不能では過大記述をしない）。
- * - EXIF向き: SourceDecode が読んだ値を SourceOrientation で手動正規化する
- *   （MANUAL_APPLY 既定・戦略は SourceDecodePolicy 参照。読めない場合は正規化せず警告）。
- * - Gainmap (Ultra HDR) は未解決 → 必ず warnings に明示する（SDR トーンのみ）。
+ * - EXIF向き: SourceDecodePolicy の正本戦略（PLATFORM_APPLIED〔実機確定 2026-10-19:
+ *   ImageDecoder が content URI の EXIF orientation を自動適用〕・MANUAL_APPLY は
+ *   BitmapFactory フォールバック用の保持実装）に従う。読めない場合は正規化せず警告。
+ * - Gainmap (Ultra HDR / ISO 21496-1): ADR-026 stage-1 policy に従う
+ *   （[GainmapExportPolicy]。乗算型 tone のみ源 gainmap を未修正で引き継ぎ、
+ *   それ以外は platform 側 SDR-only 剝離+ADR-026 確定文言の警告）。
  * - 出力は新規エンコードのみ。
- * - メタデータ: EXIF/GPS は書き込まない（最小化・GPS除去、§8）。EXIF pass-through は未実装。
- *   ICC sRGB タグ付与：JPEG は MinimalSrgbIcc + JpegIcc で APP2 挿入（既存 ICC/破綻セグメント
- *   では挿入を中止し、その旨を警告する）。PNG は sRGB チャンクを付与する。
+ * - メタデータ: EXIF は whitelist pass-through（[ExifPassThrough]: 撮影情報9タグ・
+ *   orientation 常に 1・GPS/location は常に不コピー）— B2。失敗時は書き出しを継続し
+ *   警告に落とす（FAILED にしない）。デコード前に源 EXIF を1本の追加ストリームで読む。
+ *   ICC sRGB タグ付与：JPEG は MinimalSrgbIcc + JpegIccで APP2 確保（EXIF 書込み後に
+ *   再確認・欠落なら挿入〔ExifInterface.saveAttributes() が Skia 埋め込みへ触れるかは
+ *   端末実測区分〕。既存/破綻セグメントでは挿入を中止し、その旨を警告する）。
+ *   PNG は sRGB チャンクを付与する（EXIF は書かない）。
  */
 class ExportBitmapRenderer(context: Context) {
 
@@ -79,6 +86,9 @@ class ExportBitmapRenderer(context: Context) {
                 decoded.recycle()
                 return@withContext failure(ErrorCode.EXPORT_INTERRUPTED, "cancelled during decode")
             }
+            // PR-23 (ADR-026): 源 gainmap の参照を pixel 再索引処理より先に退避
+            // （pixel 転写で bitmap が作り直されても Gainmap オブジェクトは独立して保持される）。
+            val sourceGainmap = if (decodedResult.hasGainmap) decoded.gainmap else null
             onStage(Stage.DECODE, 25)
 
             val processed = applyDevelop(decoded, recipe, decodedResult.sourceOrientation)
@@ -96,12 +106,41 @@ class ExportBitmapRenderer(context: Context) {
             // 警告の基礎は recycle() より前に評価する（recycled Bitmap の状態参照を避ける）。
             var warnings = buildWarnings(recipe, finalBitmap, spec, decodedResult)
 
+            // PR-23 (ADR-026) policy 分岐: 乗算型のみ pass-through、それ以外は SDR-only。
+            // 源 gainmap が無い source（通常 JPEG）には HDR 警告を出さない（無警告=無利得）。
+            // decode 結合の正立化変換（platform 自動適用 / 手動正規化）も「画素へ適用された変換」
+            // であり、gainmap の同時再索引は存在しないため pass-through 不成立（未実測領域は通さない）。
+            if (sourceGainmap != null) {
+                val orientationTransformed =
+                    decodedResult.sourceOrientation >= 2 || decodedResult.orientationAppliedByUs
+                when (GainmapExportPolicy.classify(recipe, spec.format, orientationTransformed)) {
+                    GainmapExportPolicy.Mode.PASS_THROUGH -> {
+                        // [実測] PR-22 spike: setGainmap(源)+compress はマーカ/諸元を完全保全する。
+                        finalBitmap.setGainmap(sourceGainmap)
+                        warnings += GainmapExportPolicy.WARNING_PASS_THROUGH
+                    }
+                    GainmapExportPolicy.Mode.STRIP_TO_SDR -> {
+                        // 画素再索引で gainmap は既に剥離済み。
+                        // [実測] PR-22 spike: gainmap 無し bitmap の compress は全マーカを消す。
+                        warnings += GainmapExportPolicy.WARNING_STRIP_TO_SDR
+                        if (orientationTransformed) {
+                            warnings +=
+                                "HDR: decode 段の orientation 変換（正立化）に gainmap の同時再索引が存在しないため pass-through 不成立（HDR/SDR 整合は未実測・stage-2 課題）"
+                        }
+                    }
+                }
+            }
+
             val digest = MessageDigest.getInstance("SHA-256")
             val digestOut = DigestOutputStream(target, digest)
             val width = finalBitmap.width
             val height = finalBitmap.height
 
-            val encodeOutcome = encodeAndWrite(finalBitmap, spec, digestOut, onStage)
+            // EXIF whitelist の元値（decode 済 bitmap とは別の1本のストリームで読む）。
+            // 読取不能は null（警告側に落とし、書き出し自体は続行する）。
+            val sourceExifValues = ExifPassThrough.readSource(appContext.contentResolver, source)
+
+            val encodeOutcome = encodeAndWrite(finalBitmap, spec, digestOut, onStage, sourceExifValues)
             finalBitmap.recycle()
             val failureEnc = encodeOutcome.failure
             if (failureEnc != null) return@withContext failureEnc
@@ -140,6 +179,7 @@ class ExportBitmapRenderer(context: Context) {
         spec: ExportRenderSpec,
         digestOut: DigestOutputStream,
         onStage: (Stage, Int) -> Unit,
+        sourceExifValues: Map<String, String>?,
     ): EncodeOutcome {
         return when (spec.format.uppercase()) {
             FORMAT_JPEG -> {
@@ -152,16 +192,36 @@ class ExportBitmapRenderer(context: Context) {
                 }
                 var bytes = mem.toByteArray()
                 val extra = mutableListOf<String>()
-                val embedded = JpegIcc.insertApp2IccProfile(bytes, MinimalSrgbIcc.profileBytes())
-                if (embedded == null) {
-                    // 【実機確定】Skia の JPEG エンコーダは Bitmap の色空間（sRGB 等）に応じ
-                    // 既定で APP2 ICC を埋め込む。埋め込み済みは「sRGB タグ目的は達成済み」なので
-                    // 警告対象外。埋め込みが無く、かつ挿入も不能（構造破綻）の場合のみ明示警告。
-                    if (!JpegIcc.hasApp2IccProfile(bytes)) {
-                        extra += "JPEG ICC embedding skipped: no embedded ICC and APP2 insertion not possible (segment malformed)"
-                    }
+
+                // ---- B2 EXIF whitelist pass-through（encode 済バイトへ temp 経由で書込）----
+                // sourceUnreadable（null）→ 欠落側に倒して続行（警告）。GPS/location は未含。
+                if (sourceExifValues == null) {
+                    extra += "source EXIF unreadable; EXIF pass-through skipped (orientation not written)"
                 } else {
-                    bytes = embedded
+                    val toWrite = ExifPassThrough.attributesToWrite(sourceExifValues)
+                    when (val written = ExifPassThrough.applyToJpegBytes(appContext.cacheDir, bytes, toWrite)) {
+                        is ExifPassThrough.Outcome.Success -> {
+                            bytes = written.bytes
+                            val list = toWrite.keys
+                            extra += "EXIF whitelist copied: ${list.joinToString(prefix = "[n=${list.size}] ", separator = "/")}" +
+                                " (orientation forced to 1; GPS/location not copied)"
+                        }
+                        is ExifPassThrough.Outcome.Failure -> {
+                            bytes = written.fallbackBytes
+                            extra += "EXIF write failed after encode; export continued without EXIF copy: ${written.reason}"
+                        }
+                    }
+                }
+
+                // ---- ICC: EXIF 書込み後の最終確認（ExifInterface.saveAttributes() の APP2 影響は端末実測区分）----
+                // 欠落なら今ここで挿入する（ICC 存在を出力契約とする・挿入不能では明示警告）。
+                if (!JpegIcc.hasApp2IccProfile(bytes)) {
+                    val inserted = JpegIcc.insertApp2IccProfile(bytes, MinimalSrgbIcc.profileBytes())
+                    if (inserted == null) {
+                        extra += "JPEG ICC embedding skipped: no embedded ICC and APP2 insertion not possible (segment malformed)"
+                    } else {
+                        bytes = inserted
+                    }
                 }
                 digestOut.write(bytes)
                 digestOut.flush()
@@ -177,7 +237,7 @@ class ExportBitmapRenderer(context: Context) {
                 val withSrgb = PngMetadata.insertSrgbChunk(mem.toByteArray())
                 digestOut.write(withSrgb)
                 digestOut.flush()
-                EncodeOutcome(null)
+                EncodeOutcome(null, listOf("export metadata minimized: no EXIF written (PNG output); GPS/location never copied"))
             }
             else -> EncodeOutcome(failure(ErrorCode.UNSUPPORTED_CODEC, "unsupported export format: ${spec.format}"))
         }
@@ -261,9 +321,8 @@ class ExportBitmapRenderer(context: Context) {
                 "input ICC sRGB conversion could not be verified; treated as sRGB"
             },
             exifWarning(decode),
-            // Gainmap (Ultra HDR) は未解決 → 必ず明示する（SDR トーンのみ・降格維持）。
-            "HDR gainmap (Ultra HDR) not processed; SDR tone only",
-            "export metadata minimized: no EXIF/GPS written; EXIF pass-through not implemented",
+            // Gainmap (Ultra HDR) 警告と EXIF pass-through 警告は render()/encodeAndWrite 側で
+            // 源画像と policy 分岐に応じて付与する（ADR-026・B2。無利益な源には HDR 警告を出さない）。
         )
         if (decode.usedFallback) warnings += SourceDecode.FALLBACK_BITMAP_FACTORY_WARNING
         // この段階で読まないノードは、既定値でないときのみ警告する（develop 適用ノードを偽警告にしない）。

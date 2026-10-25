@@ -49,6 +49,11 @@ data class ExportJobRequest(
     val baseFileName: String? = null,
     /** PUBLISHING 成功後に記録される実出力URI（MediaStore確定URL）。 */
     val outputFinalUri: String? = null,
+    /**
+     * レンダラー（ExportBitmapRenderer）が SUCCESS 時に付与した issue 警告一覧
+     * （ADR-014: 無音に捨てない。UI 表示経路は未実装〔既知の制限〕で、request ファイル側に
+     * 記録して残す。DB schema 変更なし → export_jobs テーブルはスキーマ不変）。 */
+    val issueNotes: List<String> = emptyList(),
 )
 
 /** 設定ハッシュ: 同一設定かの判定・settingsHash カラム用。純Kotlin。 */

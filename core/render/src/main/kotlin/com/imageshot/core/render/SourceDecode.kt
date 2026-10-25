@@ -59,6 +59,12 @@ object SourceDecode {
         val orientationAppliedByUs: Boolean,
         /** BitmapFactory フォールバックを使ったか（警告条件）。 */
         val usedFallback: Boolean,
+        /**
+         * 源画像が gainmap (Ultra HDR / ISO 21496-1) を持っていたか（decode 直後の実測）。
+         * [実測] PR-22 spike: BitmapFactory / ImageDecoder（sRGB+SOFTWARE＝本クラスの
+         * 同一構成）の双方が hasGainmap を自動検出する。DB schema 変更なし（07 PR-23）。
+         */
+        val hasGainmap: Boolean,
     )
 
     /**
@@ -110,6 +116,7 @@ object SourceDecode {
             sourceOrientation = orientation,
             orientationAppliedByUs = manualNormalize,
             usedFallback = usedFallback,
+            hasGainmap = bitmap.hasGainmap(),
         )
     }
 

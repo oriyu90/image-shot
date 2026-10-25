@@ -236,7 +236,7 @@ ADRは「背景→判断→代替案→効果・代償→検証方法→再検�
 - **再検討条件**: リリース版の実機実行でシリアライズ/DB 崩壊（serializer 消去等）が出た場合、keep ルールを追加し R8 分析 Path C 結論に記録。AGP 9.3+ 移行時は `:app:analyzeReleaseR8Config` スタンドアロンタスクの定量 Path A 分析に切替。
 ## ADR-026 — A3 stage-1: UltraHDR/gainmap は条件付き pass-through（乗算型 tone のみ）＋それ以外は SDR-only 剝離と警告（HDR 同時編集は stage-2）
 
-- **状態**: Accepted（spike 実測に基づく。2026-10-25）
+- **状態**: Accepted（spike 実測〔PR-22〕+ stage-1 実装の実機契約検証〔PR-23〕に基づく。2026-10-25）
 - **背景**: 06 棚卸し A3（`01` C-03）。現行パイプラインは gainmap を検出せず `HDR gainmap not processed; SDR tone only` 警告のまま。PR-22（07 Wave-3 §6）で S-03 spike を実機実測し stage-1 policy を決定（06 判断待ち⑤相当）。
 - **spike 実測（2026-10-25・TB710FU / API 36 / `core:render` androidTest `GainmapProbeDeviceTest`・記録専用・assert ナシ）**:
   | 項目 | 実測 |
@@ -252,13 +252,31 @@ ADRは「背景→判断→代替案→効果・代償→検証方法→再検�
   1. **案 B（条件付き pass-through）を採用**: spike②で compress 保全が緑であることが前提条件として成立した。
      - pass-through 対象: **底 bitmap への全画素一様の乗算型 tone 編集のみで、gainmap 無修正**（露出 EV / WB gains 相当・PR-23 の `RecipeToneCurve` 乗算系フィルタの型分類に則る）。gainmap の同時編集（gainmap 再計算）は stage-2。
      - それ以外（曲線/HSL/幾何/局部/非線形）は gainmap を明示剝離して **SDR-only 出力** とし、警告文言を出す。
-  2. **警告文言（ADR-014 型・草案）**:
+  2. **警告文言（ADR-014 型・確定。PR-23 で逐語採用〔`GainmapExportPolicy` 定数〕・request ファイル issueNotes に保存）**:
      - SDR-only 剝離時: `HDR 高輝度データはこの書き出しに引き継がない（SDR 出力）`
      - 乗算 pass-through 時（truthful 限界の明示）: `HDR 出力の gainmap はもとのまま（露出/WB 編集の HDR 側への反映は未対応）`
-  3. **decode 戦略**: `SourceDecode`（sRGB 強制・SOFTWARE アロケータ）でも **gainmap は platform decoder により自動保持される**（spike② の `ImageDecoder` 経路で hasGainmap=true 継続を実測）。本側での decode 後 gainmap の明示破棄/再適用は既定で行わない。decode 検出の Result 拡張（`hasGainmap`）は PR-23 で追加（DB schema 変更なし・payload JSON 併記方式は 07 PR-23）。
+     - 追加（実測未取得領域・PR-23 追補）: decode 段の orientation 正立化が起きた source は
+       pass-through 不成立（下記実装条件参照）。この理由短縮は renderer 側で警告行として併記する。
+  3. **decode 戦略**: `SourceDecode`（sRGB 強制・SOFTWARE アロケータ）でも **gainmap は platform decoder により自動保持される**（spike② の `ImageDecoder` 経路で hasGainmap=true 継続を実測）。本側での decode 後 gainmap の明示破棄/再適用は既定で行わない。decode 検出の Result 拡張（`hasGainmap`）は PR-23 実装済（`SourceDecode.Result.hasGainmap`・DB schema 変更なし）。
+  4. **stage-1 実装条件（PR-23・`GainmapExportPolicy`）**: pass-through = 画素に効く変換の全集合が
+     乗算型（露出 EV / WB 温度利得 / tint 利得〔`RecipeToneCurve.tempGains/tintGains` 同一式〕）で
+     あること ＋ 実行ジオメトリ変換なし（`EditNodeSpecs.isNeutralGeometry` 同一判定・**不正値は
+     安全側 STRIP**）＋ masterカーブ/HSL 中立（`RecipeCurve.isNeutral`/`RecipeHsl.isNeutral` 同一
+     判定）＋ JPEG 出力 ＋ **decode 段の orientation 正立化なし**（`sourceOrientation >= 2` は基底
+     画素の platform 転置を伴う。**platform が gainmap content も同時転置するかは実測未取得**
+     のため未実測領域は通さない）。R/G/B チャンネルカーブ・ディテール・レンズ/透視・局所マスクは
+     画素不変のため判定に含めない（将来の適用化時に本分類と applier/Geometry の適用集合を
+     同時更新すること）。
 - **制限（明示）**: ① spike fixture は自作合成（platform encode 経路）のみで、**カメラ/第三者由来 UltraHDR ソースとの互換観察は未達**（06 判断待ち⑥連動・DngCreator 撮影可否等と同様の fixture 調達課題）。② gainmap pass-through の理論整合（HDR 表示が編集の意図に乗るか）は spike では機械的保全のみを確認し、理論の妥当性評価は stage-2（gainmap 同時編集）の前提で置く。③ 幾何編集は自前転置（PR-2 実装）なので gainmap の保全はこの実装系では自動的でない（stage-1 では幾何以降は SDR-only）。
-- **検証**: 本 ADR の記載追加に伴うコード変更なし（PR-22 受入条件の spike 実測記録化）。procurement なし・新規依存なし。
-- **代償**: stage-1 では HDR 表示整合の完全性を保証しない（乗算系でも HDR 側は原画像基準）。警告文言の真実性は PR-23 の実装テスト（encode 前後 gainmap 保持の device テスト）で再記録される。
+- **検証**: PR-22 受入条件の spike 実測記録化 + **PR-23 stage-1 実装の実機契約検証（2026-10-25・`GainmapExportPolicyDeviceTest` 4/4緑・TB710FU / API 36）**:
+  | 契約テスト | 実測 |
+  |---|---|
+  | 乗算 pass-through | 露出 EV 0.35 → 出力に XMP/hdrgm/ISO 21496/MPF 全マーカ存続・再 decode hasGainmap=true・APP2 ICC 存在・orientation=1 |
+  | 非乗算 STRIP | contrast 0.4 → 全マーカ消失・hasGainmap=false・APP2 ICC 存在 |
+  | EXIF whitelist | Make/Model/DateTimeOriginal/FNumber/ISO/FocalLength/ExposureTime が写る（RATIONAL は androidx 正規化表現〔"28/10"→"2.8"〕）・orientation 6→1 強制・**GPS/location 不写（setLatLong で入れた源 GPS が消える実測）** |
+  | リサイズ pass-through | 露出+最短辺 256px リサイズでも hasGainmap=true・全マーカ存続（gainmap は基底寸法非依存の実測） |
+  | **saveAttributes() のマーカ影響（最大の未実測点確定）** | **androidx exifinterface 1.4.2 `saveAttributes()` は既存 APP2（Skia ICC）/XMP gainmap/hdrgm/ISO 21496/MPF を共存させる**（実測 4/4。コード本体: `ExifPassThrough` 経路・後段 ICC 再確認+欠落挿入は保険として常設） |
+- **代償**: stage-1 では HDR 表示整合の完全性を保証しない（乗算系でも HDR 側は原画像基準）。警告文言は request ファイル issueNotes に保存されるが UI 表示経路は未実装（既知制限・06）。orientation 正立化あり又は幾何変換ありの源 UltraHDR は SDR-only に落ちる（安全側・真実性優先）。
 - **再検討条件**: ① stage-2（gainmap 同時編集・ISO 21496-1 優先 decode 座標系）着手時、② カメラ/第三者由来 UltraHDR ソースで decode 前提が変った場合、③ ライブラリ（Coil など）の表示対応が本 app の書き出しと矛盾する場合。
 
 ## 変更管理

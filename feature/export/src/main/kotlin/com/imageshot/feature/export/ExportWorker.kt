@@ -183,7 +183,15 @@ class ExportWorker(
             }
             is ImageOpResult.Success -> {
                 // 最終出力URIの記録（DBには state 正本カラムのみ存在しない; request ファイル側に記録）
-                repository.persistRequest(jobId, request.copy(outputFinalUri = publishOutcome.value.toString()))
+                // PR-23: renderer の ISSUE 警告（ADR-026/EXIF pass-through 等）を request 側へ併記し
+                // 無音を回避する（ADR-014。UI 表示経路は未実装・既知の制限）。
+                repository.persistRequest(
+                    jobId,
+                    request.copy(
+                        outputFinalUri = publishOutcome.value.toString(),
+                        issueNotes = renderOutcome.value.warnings,
+                    ),
+                )
                 repository.transition(jobId, ExportJob.State.COMPLETE, 100, null, attempt)
                 repository.cleanupStaging(jobId)
                 Result.success()
