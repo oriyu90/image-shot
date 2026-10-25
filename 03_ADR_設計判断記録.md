@@ -234,6 +234,33 @@ ADRは「背景→判断→代替案→効果・代償→検証方法→再検�
 - **判断**: `release` と `benchmark` の双方に `isMinifyEnabled=true` / `isShrinkResources=true` / `proguard-android-optimize.txt` + 最小 keep（kotlinx.serialization canonical 分組を `com.imageshot.core.model.**` に限定）。R8 全モードの既定値（fullMode default true）を利用。手動 DI・リフレクションはなし、Room/WorkManager/Compose/Coroutines は AAR consumer rules に従う。
 - **検証**: `:app:assembleRelease` 成功（R8 実行・lintVitalRelease 含む）。リリース APK 3,004,509 B（3.0 MB）、AAB 3,954,663 B（3.77 MiB）— `nfr_catalog.md` NFR-08 の方法論注記に従う。**実機でのリリース版ランタイム確認: 2026-10-19 に実施・全確認点 緑**（uninstall → release install → 起動・空ライブラリ描画 → SAF 取り込み → エディタ描画（改訂 r0 生成・Room 書込み+serialization）→ UI 書き出し COMPLETE（出力 135,420B・APP2 ICC 1/1 470B）→ 原本 MD5 `5daed919…` 不変）。失敗再現時は `mapping.txt` 32.2MB から特定可能。
 - **再検討条件**: リリース版の実機実行でシリアライズ/DB 崩壊（serializer 消去等）が出た場合、keep ルールを追加し R8 分析 Path C 結論に記録。AGP 9.3+ 移行時は `:app:analyzeReleaseR8Config` スタンドアロンタスクの定量 Path A 分析に切替。
+## ADR-026 — A3 stage-1: UltraHDR/gainmap は条件付き pass-through（乗算型 tone のみ）＋それ以外は SDR-only 剝離と警告（HDR 同時編集は stage-2）
+
+- **状態**: Accepted（spike 実測に基づく。2026-10-25）
+- **背景**: 06 棚卸し A3（`01` C-03）。現行パイプラインは gainmap を検出せず `HDR gainmap not processed; SDR tone only` 警告のまま。PR-22（07 Wave-3 §6）で S-03 spike を実機実測し stage-1 policy を決定（06 判断待ち⑤相当）。
+- **spike 実測（2026-10-25・TB710FU / API 36 / `core:render` androidTest `GainmapProbeDeviceTest`・記録専用・assert ナシ）**:
+  | 項目 | 実測 |
+  |---|---|
+  | fixture 生成 | 数学合成 SDR bitmap（512x384）に数学合成 gainmap content（64x64・ratio [1,1,1]→[3,3,3]・gamma 1）を `Bitmap.setGainmap()` で付与 → `compress(JPEG,95)` で **UltraHDR JPEG 17,614 B が端末上で生成**（出所=本 spike。第三者/カメラ由来は未入手） |
+  | 出力ヘッダ | XMP APP1 + `hdrgm` + **ISO 21496 マーカ + MPF 全マーカ存在**（platform encode は [文書] どおり v1/v1.1 併記） |
+  | decode 検出① | `BitmapFactory` による decode と `ImageDecoder`（ALLOCATOR_SOFTWARE + setTargetColorSpace(SRGB)＝`SourceDecode` と同一構成）の**双方で `hasGainmap()`=true・諸元完全再現**（ratioMax 2.9999967 = encode 側量子化） |
+  | 乗算編集+compress② | 露出相当の全画素 1.27 乗算後、gainmap を未修正のまま `compress(JPEG,95)` → 出力 24,173 B。**全ヘッダマーカ存続・再 decode で hasGainmap=true・gainmap 諸元（寸法 64x64・ratio/gamma）完全保全** |
+  | SDR-only③ | `setGainmap(null)` → `compress(JPEG,95)` → 出力 17,244 B。**全マーカ消失・hasGainmap=false**（SDR-only 出力の実現手段確定） |
+  | 非乗算観察④ | コントラスト S カーブ slope 1.35 を gainmap 付きのまま compress → 出力 24,466 B・技術的には保全される（マーカ存続）が、HDR 表示の理論整合は破れる（観察のみ・stage-1 の policy では不採用条件） |
+  | 端末カメラ⑤ | /sdcard/DCIM は depth<=3 で jpg 無し（又は参照不可）→ **カメラ HDR 撮影来源の観察は未達・権限は追加しない** |
+- **判断（stage-1）**:
+  1. **案 B（条件付き pass-through）を採用**: spike②で compress 保全が緑であることが前提条件として成立した。
+     - pass-through 対象: **底 bitmap への全画素一様の乗算型 tone 編集のみで、gainmap 無修正**（露出 EV / WB gains 相当・PR-23 の `RecipeToneCurve` 乗算系フィルタの型分類に則る）。gainmap の同時編集（gainmap 再計算）は stage-2。
+     - それ以外（曲線/HSL/幾何/局部/非線形）は gainmap を明示剝離して **SDR-only 出力** とし、警告文言を出す。
+  2. **警告文言（ADR-014 型・草案）**:
+     - SDR-only 剝離時: `HDR 高輝度データはこの書き出しに引き継がない（SDR 出力）`
+     - 乗算 pass-through 時（truthful 限界の明示）: `HDR 出力の gainmap はもとのまま（露出/WB 編集の HDR 側への反映は未対応）`
+  3. **decode 戦略**: `SourceDecode`（sRGB 強制・SOFTWARE アロケータ）でも **gainmap は platform decoder により自動保持される**（spike② の `ImageDecoder` 経路で hasGainmap=true 継続を実測）。本側での decode 後 gainmap の明示破棄/再適用は既定で行わない。decode 検出の Result 拡張（`hasGainmap`）は PR-23 で追加（DB schema 変更なし・payload JSON 併記方式は 07 PR-23）。
+- **制限（明示）**: ① spike fixture は自作合成（platform encode 経路）のみで、**カメラ/第三者由来 UltraHDR ソースとの互換観察は未達**（06 判断待ち⑥連動・DngCreator 撮影可否等と同様の fixture 調達課題）。② gainmap pass-through の理論整合（HDR 表示が編集の意図に乗るか）は spike では機械的保全のみを確認し、理論の妥当性評価は stage-2（gainmap 同時編集）の前提で置く。③ 幾何編集は自前転置（PR-2 実装）なので gainmap の保全はこの実装系では自動的でない（stage-1 では幾何以降は SDR-only）。
+- **検証**: 本 ADR の記載追加に伴うコード変更なし（PR-22 受入条件の spike 実測記録化）。procurement なし・新規依存なし。
+- **代償**: stage-1 では HDR 表示整合の完全性を保証しない（乗算系でも HDR 側は原画像基準）。警告文言の真実性は PR-23 の実装テスト（encode 前後 gainmap 保持の device テスト）で再記録される。
+- **再検討条件**: ① stage-2（gainmap 同時編集・ISO 21496-1 優先 decode 座標系）着手時、② カメラ/第三者由来 UltraHDR ソースで decode 前提が変った場合、③ ライブラリ（Coil など）の表示対応が本 app の書き出しと矛盾する場合。
+
 ## 変更管理
 
 1. ADRを更新する場合、元判断を消さず`Superseded by ADR-xxx`を記録する。
