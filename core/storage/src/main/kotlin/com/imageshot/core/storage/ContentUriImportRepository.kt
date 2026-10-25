@@ -26,6 +26,10 @@ import kotlinx.coroutines.withContext
  * - 画像原本の書き込みは一切行わない（ADR-009）。M1 の登録では原本コピーを作らない
  *   （sha-256 は遅延計算。stagingは RAW現像の random access 要件が確定した時点で Staging 経由）。
  * - 写真の内容・パス・GPS を外部へ送信しない（01_製品仕様書.md §12）。INTERNET権限は使わない。
+ * - 表示名（PR-19）は取り込み時点で [AssetDisplayNameResolver] の解決連鎖を1回だけ通し、
+ *   その結果を既存の displayName 列（[AssetEntity.displayName]）へ保存する
+ *   （DB schema 変更なし・解決連鎖が全滅しても取り込み自体は失敗にしない）。
+ *   fullyResolved=false の UI 警告は library 側の警告メカニズムと後続 PR で調整する。
  */
 class ContentUriImportRepository(
     context: Context,
@@ -34,6 +38,11 @@ class ContentUriImportRepository(
 ) : ImportRepository {
 
     private val appContext = context.applicationContext
+
+    /** 表示名の解決連鎖（PR-19）。取り込み経路から1回だけ通される（DI は既定実装に委ねる）。 */
+    private val displayNameResolver = AssetDisplayNameResolver { uri ->
+        AndroidDisplayNameSource(contentResolver, context.applicationContext, uri)
+    }
 
     /** RAW現像の random access 要件が確定したとき用の staging 作業ディレクトリ（cacheDir 配下）。 */
     private val stagingDir: java.io.File
@@ -47,7 +56,6 @@ class ContentUriImportRepository(
                 "禁止スキーマ scheme=${uri.scheme}（オフライン優先: ネットワークURIは読み込まない）",
             )
         }
-        val displayName = queryDisplayName(uri)
         val declaredSize = querySize(uri)
 
         try {
@@ -56,6 +64,15 @@ class ContentUriImportRepository(
                 val sniffed = ImportSniffer.sniff(head)
                 val seekable = stream.markSupported()
                 val sizeBytes = declaredSize ?: if (seekable) countRemaining(stream) else null
+
+                // mime（provider 明示値）は resolver への拡張子推定材料として1回だけ取得する
+                // （旧: probe 構築時点の getType。分類挙動は同じ try の内側に維持）。
+                val mimeGuess = contentResolver.getType(uri)
+                // 表示名の解決連鎖（PR-19）: 取り込み時に1回だけ resolver を通す。決まった name は
+                // ImportProbe.displayName → registerSupported 経由で AssetEntity.displayName（既存列）
+                // にそのまま保存される（schema 変更なし）。連鎖は例外を吸収し、全滅してもここが
+                // 失敗になることはない（取り込み失敗に連動させない・失敗時契約は resolver 側）。
+                val resolvedName = displayNameResolver.resolve(uri, mimeGuess, sniffed.format)
 
                 // デコーダー検証の補助（mosaic判定・bounds のみで全量展開しない §6/§4.1）。
                 val warnings = sniffed.warnings.toMutableList()
@@ -69,8 +86,8 @@ class ContentUriImportRepository(
                 ImageOpResult.Success(
                     ImportProbe(
                         uri = uri.toString(),
-                        displayName = displayName,
-                        mimeGuess = contentResolver.getType(uri),
+                        displayName = resolvedName.name,
+                        mimeGuess = mimeGuess,
                         sniffedFormat = sniffed.format,
                         sizeBytes = sizeBytes,
                         seekable = seekable,
@@ -129,6 +146,10 @@ class ContentUriImportRepository(
             }
         }
 
+    /**
+     * 表示名は resolver 連鎖（PR-19）で name が空になることはない（全滅時は hash プレースホルダ）。
+     * null になった場合は想定外の状態であり、旧来のフォールバックを防御として維持する。
+     */
     private suspend fun registerSupported(
         uri: Uri,
         probe: ImportProbe,
@@ -308,21 +329,6 @@ class ContentUriImportRepository(
                 (options.outHeight.takeIf { it > 0 } ?: 0)
         }
     }.getOrElse { 0 to 0 }
-
-    private fun queryDisplayName(uri: Uri): String? = runCatching {
-        contentResolver.query(
-            uri,
-            arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE),
-            null,
-            null,
-            null,
-        )?.use { cursor ->
-            if (cursor.moveToFirst()) {
-                val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                if (idx >= 0) cursor.getString(idx) else null
-            } else null
-        }
-    }.getOrNull()
 
     private fun querySize(uri: Uri): Long? = runCatching {
         contentResolver.query(

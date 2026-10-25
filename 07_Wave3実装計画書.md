@@ -74,7 +74,7 @@
 - **目的**: Photo Picker 経路（ローカル/クラウド）を含む表示名取得の保証。
 - **根拠**: [文書] Photo Picker はクラウド合流（Google Photos・CloudMediaProvider）が進行し、URI がクラウド提供になり得る → OPENABLE_COLUMNS の DISPLAY_NAME が常にローカル実名とは限らない（developer.android.com・2026-08 更新）。[実測] SAF 経路は `OpenableColumns.DISPLAY_NAME` 照会済みで正常（2026-10-19 ライブラリ観察）。
 - **設計（[計画]）**: `core/storage/AssetDisplayNameResolver.kt`（新規・純 Kotlin+resolver 隔離）:
-  1. 連鎖: `OpenableColumns.DISPLAY_NAME` → `DocumentsContract.getDocumentName`（document URI の場合）→ MediaStore 系 `_display_name` → `uri.lastPathSegment` の正規化（数字 ID のみならプレースホルダ形式 `img-<hash8>.jpg`）。
+  1. 連鎖: `OpenableColumns.DISPLAY_NAME` → (document URI の場合は) 投影列 `Document.COLUMN_DISPLAY_NAME` 照会 → MediaStore 系 `_display_name` → `uri.lastPathSegment` の正規化（数字 ID のみならプレースホルダ形式 `img-<hash8>.jpg`）。※計画時に想定した `DocumentsContract.getDocumentName` は SDK 公開 API に存在しないことを実装時に確認（2026-10-25・android-36 stub 実測）— 実装は等価の投影列照会を採用。
   2. 返却は `(name, fullyResolved: Boolean)`。`fullyResolved=false` の際は既存 ADR-014 型の警告表示（「表示名を復元できません」）を library ヘッダに1回だけ表示（schema 変更不要・表示名は既存 `Asset.displayName` 列に取り込み時点で保存）。
   3. **DB/Schema 不変**（重要）。
 - **手順（実装順）**: 純関数抽出 → JVM テスト（fake resolver） → `ContentUriImportRepository` 結線 → 実機 Photo Picker 観察（uiautomator1回通し。ローカル+可能ならクラウド URI）→ 台帳記録。
