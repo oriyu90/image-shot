@@ -156,6 +156,23 @@ class RecipeDetailApplierTest {
     }
 
     @Test
+    fun lightPath_processesAboveBudgetAndReportsDegraded() {
+        // 12MP 超（4001×3000）で軽量経路が実際に走り、例外なく完了して degraded を返すこと。
+        // 48MP 実画像は fixture 待ちだが、閾値超過側のコード経路はここで固定する。
+        val w = 4001
+        val h = 3000
+        val pixels = IntArray(w * h) { i -> argb(0xFF, i % 256, (i / 7) % 256, 128) }
+        val outcome = RecipeDetailApplier.applyToPixels(
+            pixels,
+            w,
+            h,
+            EditRecipe.Detail(sharpen = 0.5),
+        )
+        assertTrue(outcome.applied)
+        assertTrue(outcome.degraded)
+    }
+
+    @Test
     fun sharpenAndNoiseCancel_outIsNoOp() {
         // sharpen=0.4 (0.8) と lumaNoise=1.0 (0.8) は同一差分項で相殺され、画素は不変。
         val pixels = IntArray(64) { i -> argb(0xFF, i * 3 % 256, 20, 40) }

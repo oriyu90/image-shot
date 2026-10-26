@@ -17,7 +17,7 @@
 | `ea65cae` / `819a8b7` / `0e8463d` | PR-21（AGP 9.4/Gradle 9.6/Kotlin built-in 2.2.10）・PR-22（S-03 HDR spike→ADR-026）・PR-23（A3 stage-1+B2 EXIF pass-through） |
 | `2b753f8` | PR-27（G1 文字列外部化・08 台帳新設・lint 3 feature error 0・実機 en-US Ja フォールバック確認） |
 | `1355191` | **PR-28a（D1 per-channel curves・golden ΔE 4 ケース化）** |
-| （本 PR） | **PR-28b（D4 自由角度/自由クロップ・golden 5 ケース化）+ PR-28c（D2 ディテール・golden 6 ケース化）** |
+| `3023051` | **PR-28b（D4 自由角度/自由クロップ）+ PR-28c（D2 ディテール）**（実装連続のため 1 コミットに統合・golden 5→6 ケース化） |
 
 ### 1.2 PR-28a（D1 per-channel curves）実施結果 — **commit `1355191`・2026-10-26**
 
