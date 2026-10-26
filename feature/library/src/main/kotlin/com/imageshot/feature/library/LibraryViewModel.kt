@@ -16,6 +16,7 @@ import com.imageshot.core.storage.ThumbnailGenerator
 import com.imageshot.core.storage.ThumbnailSeed
 import com.imageshot.core.storage.UriAccessibility
 import com.imageshot.feature.library.R as LibraryR
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -92,6 +93,12 @@ class LibraryViewModel(
 
     /** ライブラリ可視化を起点とする単一の有限ジョブ（複数回の指示はここへ収斂させる）。 */
     private var thumbnailEnsureJob: Job? = null
+
+    /** G2: 表示時 URI 失効検査の単一ジョブ（多重起動しない）。 */
+    private var visibilityCheckJob: Job? = null
+
+    /** G2: 直近の表示時検査時刻（再表示の連打で provider を叩き続けないための下限間隔）。 */
+    private var lastVisibilityCheckAtMs = 0L
 
     /** ソート/検索（表示名・撮影日）に沿った asset flow。Room DAO で完結させる。 */
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -243,31 +250,78 @@ class LibraryViewModel(
         }
     }
 
+    /**
+     * G2（PR-30）: ライブラリの表示・再表示時の URI 失効検査。
+     *
+     * - 対象は `availability == ok` の資産のみ（[AvailabilitySweep.plan]）。失効・切断済みは
+     *   明示ボタン（[refreshAvailability]）での回復確認に委ね、表示のたびには走査しない。
+     * - `ContentResolver.openInputStream` 相当の probe は [ImportRepository.probeAvailability] が
+     *   Dispatchers.IO で実行する（ここも IO ディスパッチャで起動する）。
+     * - 失効/切断を検出したら availability を DB へ書き戻す。一覧は Room の Flow 購読なので
+     *   追加の再読込なしに即時反映される。
+     * - 常時ポーリングはしない: 表示イベント起点 + 単一ジョブ + 下限間隔。
+     */
+    fun verifyVisibleAvailability() {
+        if (visibilityCheckJob?.isActive == true) return
+        val now = System.currentTimeMillis()
+        if (lastVisibilityCheckAtMs != 0L && now - lastVisibilityCheckAtMs < VISIBILITY_CHECK_MIN_INTERVAL_MS) {
+            return
+        }
+        lastVisibilityCheckAtMs = now
+        visibilityCheckJob = viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val entries = assetDao.getAllOnce().map {
+                    AvailabilitySweep.Entry(id = it.id, sourceUri = it.sourceUri, availability = it.availability)
+                }
+                val plan = AvailabilitySweep.plan(entries, includeUnavailable = false)
+                if (plan.targets.isEmpty()) return@launch
+                val results = plan.targets.map { entry ->
+                    entry to importRepository.probeAvailability(Uri.parse(entry.sourceUri))
+                }
+                val transitions = AvailabilitySweep.transitions(results)
+                if (transitions.isEmpty()) return@launch
+                for (transition in transitions) {
+                    assetDao.updateAvailability(transition.id, transition.to)
+                }
+                val revoked = transitions.count { it.to == Asset.AVAILABILITY_REVOKED }
+                val disconnected = transitions.count { it.to == Asset.AVAILABILITY_DISCONNECTED }
+                appendMessage(
+                    strings.get(LibraryR.string.library_msg_visibility_check_found, revoked, disconnected),
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // 失敗を黙って握り潰さず、クラッシュもしない（ADR-014 / クラッシュ安全）。
+                // 一覧は直前の状態のまま表示され、ユーザーは手動の「可用性確認」で再試行できる。
+                appendMessage(
+                    strings.get(
+                        LibraryR.string.library_msg_visibility_check_failed,
+                        e.message ?: e.javaClass.simpleName,
+                    ),
+                )
+            }
+        }
+    }
+
     /** URI可用性の再検査（U01: 失効→切断状態表示→再関連付け導線）。原本を全量読まない。 */
     suspend fun refreshAvailability() {
         sweeping.value = true
         try {
             val assets = assetDao.getAllOnce()
-            var revoked = 0
-            var disconnected = 0
-            var recovered = 0
-            for (entity in assets) {
-                val probed = importRepository.probeAvailability(Uri.parse(entity.sourceUri))
-                val next = when (probed) {
-                    UriAccessibility.OK -> Asset.AVAILABILITY_OK
-                    UriAccessibility.REVOKED -> Asset.AVAILABILITY_REVOKED
-                    UriAccessibility.DISCONNECTED -> Asset.AVAILABILITY_DISCONNECTED
-                }
-                if (next != entity.availability) {
-                    assetDao.updateAvailability(entity.id, next)
-                    if (probed == UriAccessibility.OK) recovered++
-                }
-                when (probed) {
-                    UriAccessibility.REVOKED -> revoked++
-                    UriAccessibility.DISCONNECTED -> disconnected++
-                    UriAccessibility.OK -> Unit
-                }
+            val entries = assets.map {
+                AvailabilitySweep.Entry(id = it.id, sourceUri = it.sourceUri, availability = it.availability)
             }
+            val plan = AvailabilitySweep.plan(entries, includeUnavailable = true)
+            val results = plan.targets.map { entry ->
+                entry to importRepository.probeAvailability(Uri.parse(entry.sourceUri))
+            }
+            val transitions = AvailabilitySweep.transitions(results)
+            for (transition in transitions) {
+                assetDao.updateAvailability(transition.id, transition.to)
+            }
+            val revoked = results.count { (_, probed) -> probed == UriAccessibility.REVOKED }
+            val disconnected = results.count { (_, probed) -> probed == UriAccessibility.DISCONNECTED }
+            val recovered = transitions.count { it.to == Asset.AVAILABILITY_OK }
             if (revoked > 0 || disconnected > 0) {
                 appendMessage(
                     strings.get(LibraryR.string.library_msg_sweep_found, revoked, disconnected),
@@ -395,5 +449,11 @@ class LibraryViewModel(
 
     private companion object {
         const val MESSAGES_LIMIT = 12
+
+        /**
+         * 表示時検査の下限間隔。再表示（編集から戻る等）の連打で provider を叩き続けないための
+         * ガードであり、失効検出の遅延は最大でもこの値に収まる。
+         */
+        const val VISIBILITY_CHECK_MIN_INTERVAL_MS = 3_000L
     }
 }

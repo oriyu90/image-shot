@@ -40,4 +40,7 @@ dependencies {
 
     implementation(libs.coil.compose)
     implementation(libs.kotlinx.coroutines.android)
+
+    // PR-30 G2: availability 判定（純粋関数）の JVM 単体テスト。Robolectric は導入しない。
+    testImplementation(libs.junit)
 }

@@ -358,6 +358,38 @@ export 側は issueNotes に記録）。UI 警告の全面結線は ADR-014 の�
 - **テスト**: 大型/折りたたみ/回転の UI 検証+全回帰+availability 失効の実機確認（fixture: ローカルファイル削除で LOST 観察）。
 - **受入条件**: 上記+targetSdk 37 採用の準備状況台帳（判断待ち⑦）。
 - **工数**: M / **依存**: なし（Wave 3 末尾で必須化）。
+- **実装結果（2026-10-26・コード完了・実機検証済〔下記〕）**:
+  1. **G2**: 表示・再表示時に `availability == ok` の asset だけを IO ディスパッチャで
+     `probeAvailability`（= `openInputStream` の成否）に掛け、失効/切断のみ DB へ書き戻す
+     `LibraryViewModel.verifyVisibleAvailability()` を追加（単一ジョブ + 下限間隔 3s・常時ポーリングなし）。
+     対象決定と遷移判断は純粋関数 `AvailabilitySweep` に切り出し JVM テスト 8 件で固定。
+     既存の「可用性確認」ボタン（全件走査・回復検出）と再接続導線（SAF 再選択 → 指紋照合 →
+     `updateSourceUri`）は温存し、書き出し失敗理由の `URI_REVOKED` を日本語文言へ写像した。
+  2. **G3**: `MainActivity` の一括 `systemBarsPadding()` を削除し `enableEdgeToEdge()` を追加、
+     Manifest に `windowSoftInputMode="adjustResize"` を設定。各 feature 画面のルートは
+     `Scaffold(contentWindowInsets = WindowInsets.safeDrawing)` で inset を自己管理する
+     （safeDrawing は IME を含むため `imePadding` 併用の二重掛けをしない）。
+  3. **F3**: `BoxWithConstraints` の幅 840dp で分岐（WindowSizeClass の依存追加はオフライン
+     解決リスクを避けて見送り・`material3-window-size-class` 未追加）。ライブラリは
+     「一覧 + 選択中アセットの詳細/プレビュー」、編集は「プレビュー + ツールパネル横並び」。
+     狭幅は従来 1 ペイン。Navigation 3 / `ListDetailPaneScaffold` は使わない。グリッドは既存の
+     `GridCells.Adaptive(112.dp)` を維持（広幅で列数が増える）。
+  4. **実機検証（TB710FU/API36・2026-10-26/27）**: landscape 3200×2000（density override 340・幅 1505dp）
+     でライブラリ 2 ペイン（一覧+360dp 詳細: 選択→「開いて編集」）・編集 2 ペイン（プレビュー+
+     360dp ツールパネル）を目視。タブ 6 個が 360dp に収まらず「ディテール」が縦折返し・
+     「局部補正」が画面外になったため、**タブ行を横スクロール化**して全タブ到達を確認（Lead 修正）。
+     2 ペインの選択セルに枠線を追加（Lead 修正）。狭幅（`wm size 800x1280` → 602dp）は 1 ペインで
+     従来動作。portrait 2000×3200（941dp）でも 2 ペイン・inset 二重掛けなし・回転で選択タブ保持。
+     検索欄フォーカスで IME 表示（mInputShown=true）時も検索欄・一覧が隠れないことを確認。
+     書き出し画面の Scaffold inset も目視（ステータスバー重なりなし）。
+     **未検証**: 折りたたみ/マルチウィンドウ、数値入力ダイアログの IME（既知の未対処）、
+     URI 失効の実機観察（原本削除は破壊的なため実施せず・JVM 8 件とコードで担保）。
+  5. **targetSdk 37 準備状況**: 600dp+ で fixed orientation opt-out が廃止されても、
+     本 PR で幅基準のレイアウト分岐（向き非依存）と inset 自己管理へ移行したため、横向き固定を
+     前提とした画面構成は残っていない。残作業は (a) targetSdk/compileSdk 37 への更新と
+     依存（Coil/Compose）の同時更新、(b) 折りたたみ・マルチウィンドウ・大画面の実機回帰
+     （本 PR はコードのみ・実機未検証）、(c) Play 要件時期（2027 半ば見込み・TBC）の再確認で
+     あり、判断待ち⑦は引き続き「PR-30 完了後に再評価」のまま据え置く（targetSdk 値は未変更）。
 
 ---
 
@@ -413,6 +445,7 @@ PR-30 (adaptive) — targetSdk 37 採用（判断待ち⑦）の直前に必須�
 | AGP 9.4 への Kotlin/Compose バージョン随伴 | **解決（2026-10-25・PR-21）**: built-in Kotlin は AGP 9.4.0 が Kotlin 2.2.10 を同梱し独立変更不可のため、KGP 由来プラグイン（jvm/serialization/compose）を 2.2.10 に統一。kotlin-android は適用禁止化・jvmTarget は compileOptions 既定継承で明示不要を公式確認済み（[文書] 2026-09-15 更新版） | 実装済み（gradle/libs.versions.toml コメントに根拠記載）。再検討は Kotlin 3.x 正本化（built-in Kotlin の移行先）時 |
 | Photo Picker クラウド URI の表示名挙動 | **部分観察（2026-10-25）**: ローカル経路は観察済み（com.google.android.photopicker・オフライン・数字 ID のみ → プレースホルダ `img-<hash8>.png` 正推論）。**クラウド経路は TB710FU（このアカウント）では Picker 上にクラウド項目が表示されず観察未達** — ネットワーク復帰後の再観察も同じ。挙動は端末/アカウント側の実装依存のため、本項は未解決のまま残置 | 完了済み PR は 06 §3.2 行に達成と明記していない（観察達成の一部のみ）。以後の端末/アカウント条件が揃った時に再観察（PR-19 の残置項目） |
 | push 対応（リモート不在 [実測]） | リモート不在 [実測] | 判断待ち⑧ |
+| PR-30 の実機検証（2ペイン/回転/折りたたみ/IME/URI失効） | **コード完了・実機未検証（2026-10-26）**: G2/G3/F3 を実装し JVM テスト（availability 8 件）・lint・assembleDebug は緑。TB710FU（landscape 3200×2000）での 2 ペイン目視、IME 表示時の検索欄/数値ダイアログ、ファイル削除による失効検出は Lead の実機確認待ち | 07 §14「実装結果」4 項の実機確認項目 |
 
 ---
 変更管理: 本書の節ごとの更新は PR 単位で行う。結果の正本は `benchmark/nfr_catalog.md` と `06`/`03`（ADR）に必ず反映し、本書はその詳細の手順書として使う。

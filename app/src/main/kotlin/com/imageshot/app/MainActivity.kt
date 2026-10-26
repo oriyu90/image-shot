@@ -3,10 +3,7 @@ package com.imageshot.app
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.systemBarsPadding
-import androidx.compose.ui.Modifier
+import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
@@ -26,22 +23,22 @@ import kotlinx.coroutines.launch
 /**
  * MainActivity。UIスレッドには パーサ/ハッシュ/デコード/プロファイル変換を一切置かない（§10）。
  * 画面再作成（回転/折りたたみ）でも DB上の編集文書が正本（ADR-007）。SavedStateHandleはUI補助のみ。
+ *
+ * PR-30 G3: ホスト側の一括 `systemBarsPadding()` は廃止した。edge-to-edge は
+ * [enableEdgeToEdge] で有効化し、inset は各 feature 画面の [androidx.compose.material3.Scaffold]
+ * （`contentWindowInsets = WindowInsets.safeDrawing`）が自分で持つ。ホストと feature で
+ * 二重に padding しないため、画面回転・折りたたみ・IME 表示でも余白が積み上がらない。
  */
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Android 16 の強制 edge-to-edge（targetSdk 36）に対応。ステータス/ナビゲーションバーの
+        // アイコン色はこの API が自動で面の明暗に追従させる（WindowCompat 版は使わない）。
+        enableEdgeToEdge()
         val container = (application as ImageShotApplication).container
 
         setContent {
             ImageShotTheme {
-                // Android 16 の強制 edge-to-edge（targetSdk 36）に対応（edge-to-edge skill）。
-                // 各feature画面がsystemBars分を考慮していないため、ホスト側で一括適用する。
-                // TODO(M2): 各featureのScaffold自己是inset管理へ移行。
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .systemBarsPadding(),
-                ) {
                 val navController = rememberNavController()
                 NavHost(navController = navController, startDestination = "library") {
                     composable("library") {
@@ -135,7 +132,6 @@ class MainActivity : ComponentActivity() {
                             },
                         )
                     }
-                }
                 }
             }
         }

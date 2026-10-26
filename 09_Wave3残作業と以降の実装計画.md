@@ -1,4 +1,4 @@
-# 09 Wave-3 残作業と以降の実装計画（2026-10-26 更新: PR-28b/28c 完了・次は PR-30）
+# 09 Wave-3 残作業と以降の実装計画（2026-10-27 更新: PR-28b/28c・PR-30 完了／PR-29 は fixture ゲート待ち）
 
 **位置づけ**: 正本の進捗は `06_未実装欠陥と実装計画.md` §3.2 と `benchmark/nfr_catalog.md`。手順詳細は `07_Wave3実装計画書.md`。本書は PR-28a（`1355191`）完了を受けた 2026-10-26 の全面更新版であり、2026-10-25 版の現状整理と調査分析を置き換える（Steps の番号割付・判断待ちの確定事項は引き継ぐ）。進捗が動く都度 06/07 を PR 単位で更新する。
 
@@ -18,6 +18,8 @@
 | `2b753f8` | PR-27（G1 文字列外部化・08 台帳新設・lint 3 feature error 0・実機 en-US Ja フォールバック確認） |
 | `1355191` | **PR-28a（D1 per-channel curves・golden ΔE 4 ケース化）** |
 | `3023051` | **PR-28b（D4 自由角度/自由クロップ）+ PR-28c（D2 ディテール）**（実装連続のため 1 コミットに統合・golden 5→6 ケース化） |
+| `006d850` | PR-28c 12MP 超軽量経路テスト・06/09 同期 |
+| （本 PR） | **PR-30（G2 availability・G3 inset・F3 adaptive）** |
 
 ### 1.2 PR-28a（D1 per-channel curves）実施結果 — **commit `1355191`・2026-10-26**
 
@@ -58,6 +60,18 @@
 | 副次修正 | 履歴リストの潰れ（20 件超）を高さ上限+内部スクロールで修正（外側パネルのスクロールで全件到達） |
 
 - 残置: 48MP 級（>12MP）の軽量経路は fixture 待ちで未測定。preview が閾値を超えない限り降格文言は出ない（export は issueNotes 記録のみ）。
+
+### 1.7 PR-30（G2/G3/F3）実施結果 — 2026-10-27
+
+| 項目 | 結果 |
+|---|---|
+| G2 availability | `AvailabilitySweep`（純関数・JVM 8 件）+ `verifyVisibleAvailability()`（表示時・ok のみ・IO・単一ジョブ・3s 下限）。失効/切断を DB 反映し Room Flow で一覧即時更新。書き出し `URI_REVOKED` を日本語化 |
+| G3 inset | `enableEdgeToEdge()` + ホスト一括 padding 撤去 → library/editor/export の 3 画面が `Scaffold(WindowInsets.safeDrawing)` で自己管理。Manifest `adjustResize`。inset modifier の二重適用 0 件（grep） |
+| F3 adaptive | 840dp 以上で 2 ペイン（library: 一覧+360dp 詳細 / editor: プレビュー+360dp パネル）。狭幅は従来 1 ペイン。Nav3/ListDetailPaneScaffold は不使用（navigation-compose 維持）。`GridCells.Adaptive(112.dp)` は既存 |
+| 実機（TB710FU/API36） | landscape 3200×2000: 2 ペイン・選択→詳細→「開いて編集」・編集 2 ペイン・inset 正常。portrait 2000×3200（941dp）: 2 ペイン・回転で選択タブ保持・二重 inset なし。狭幅 1280×800（602dp）: 1 ペインで従来動作。IME: 検索欄フォーカスでキーボード表示（mInputShown=true）時も検索欄/一覧が隠れない。export: Scaffold inset 目視 |
+| Lead 修正 | 360dp パネルでタブ 6 個が折返し/画面外 → タブ行を横スクロール化。2 ペイン選択セルに枠線追加 |
+| 回帰 | `./gradlew test :feature:{editor,export,library}:lintDebug :app:assembleRelease` exit 0（unit 277・lint error 0）。`ui_strings_check` 違反 0（例外 29 行）。R8 release APK を debug 鍵で再署名して実機スモーク（ライブラリ 2 ペイン描画・FATAL 0・プロセス生存） |
+| 未検証 | 折りたたみ/マルチウィンドウ、数値入力ダイアログの IME、URI 失効の実機観察（原本削除は破壊的なため未実施・JVM/コードで担保）。ヒンジ領域 |
 
 ### 1.3 実機・証跡の現状
 
@@ -147,10 +161,10 @@
 
 ### Step 4: fixture 到着後 — **PR-24（RAW spike → ADR-027）→ PR-25 → PR-26**（着手条件: SD 到着・計画内容は現状のまま）
 
-### Step 5: **PR-29（D3 マスク・29a/29b/29c）→ PR-30 → Wave-3 完了チェック**
+### Step 5: **PR-29（D3 マスク・29a/29b/29c）→ PR-30 → Wave-3 完了チェック**（PR-30 ✅ 2026-10-27／PR-29 は PR-26 完了が前提のため fixture 待ち）
 
 - 29 系は 07 §13（schema 変更なし・payload 追加フィールド）が最新正本（06 §4 ④ のドリフト回収を 29a 前に実施）
-- 30: G2 availability 更新・G3 insets・F3 adaptive（targetSdk 37 の 600dp 条件対応必須）
+- 30: G2 availability 更新・G3 insets・F3 adaptive（targetSdk 37 の 600dp 条件対応必須）— **✅ 完了 2026-10-27（§1.7）**
 - 完了チェック（07 §18）の残分: 「06/07 反映 ◐」（残 PR 分）・「nfr_catalog 対応行の更新」（28c で NFR-04・26 で NFR-10）・「R8 リリース版実機回帰 2〜3 回・最終回未」（30 完了後）・push「理由明記の未対応 ✅」
 
 ### 文書保守（軽量・Step 2 以降に挟む）

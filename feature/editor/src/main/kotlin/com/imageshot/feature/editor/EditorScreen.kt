@@ -10,16 +10,23 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -27,6 +34,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
@@ -74,6 +82,8 @@ import kotlin.math.roundToInt
  *   離した時点で1件確定（onDragEnd → EditStore.commit）。カーブは指を離した時点で
  *   絶対状態イベント確定、ジオメトリはボタン操作ごとに1件確定。
  * - Undo/Redo/履歴一覧: DB 正本（EditStoreState）の表示。
+ * - PR-30: G3（画面ルートが Scaffold で inset を自己管理・ホストの一括 padding を廃止）と
+ *   F3（幅 840dp 以上でプレビューとツールパネルを横並び。ロジックは不変・配置のみ）を反映。
  */
 @Composable
 fun EditorScreen(
@@ -100,19 +110,112 @@ fun EditorScreen(
     onExport: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .background(EditorPalette.bg),
-    ) {
-        EditorTopBar(state)
+    // G3（PR-30）: ホストの一括 systemBarsPadding を廃止したため、この画面が Scaffold で
+    // 自分の inset を持つ（safeDrawing = systemBars + cutout + IME。safeDrawing に IME が
+    // 含まれるので imePadding を重ねない＝二重掛けしない）。
+    // 数値入力ダイアログは別ウィンドウのため、この Scaffold の inset 対象外（Compose の
+    // Dialog 実装の既定に従う・実機確認項目）。
+    // F3: 幅 840dp 以上ではプレビュー（左・可変）とツールパネル（右・固定幅）を横並びにする。
+    //     ロジック（スライダー/カーブ/ジオメトリの意味）は変更せず、配置だけを切り替える。
+    Scaffold(
+        modifier = modifier.fillMaxSize(),
+        containerColor = EditorPalette.bg,
+        contentWindowInsets = WindowInsets.safeDrawing,
+    ) { innerPadding ->
+        BoxWithConstraints(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .consumeWindowInsets(innerPadding)
+                .background(EditorPalette.bg),
+        ) {
+            // 選択中タブはレイアウト分岐の外側で保持する（幅の変化＝回転/折りたたみで
+            // ツールパネルが別スロットへ移っても、ユーザーのタブ選択を失わない）。
+            var toolTab by remember { mutableStateOf(EditorToolTab.BASIC) }
+            // ツールパネルの呼び出し（引数が多いため1箇所に集約し、配置だけを差し替える）。
+            val toolPanel: @Composable (Modifier) -> Unit = { panelModifier ->
+                ToolPanel(
+                    state = state,
+                    selectedTab = toolTab,
+                    onSelectTab = { toolTab = it },
+                    onSliderPreview = onSliderPreview,
+                    onSliderCommit = onSliderCommit,
+                    onCurvePreview = onCurvePreview,
+                    onCurveCommit = onCurveCommit,
+                    onCurveReset = onCurveReset,
+                    onCurveChannelSelect = onCurveChannelSelect,
+                    onGeometryRotate = onGeometryRotate,
+                    onGeometryFlip = onGeometryFlip,
+                    onGeometryCrop = onGeometryCrop,
+                    onGeometryResetCrop = onGeometryResetCrop,
+                    onGeometryAngle = onGeometryAngle,
+                    onGeometryAngleReset = onGeometryAngleReset,
+                    onGeometryCropNudge = onGeometryCropNudge,
+                    onGeometryCropScale = onGeometryCropScale,
+                    modifier = panelModifier.background(EditorPalette.panel),
+                )
+            }
+
+            if (maxWidth >= WIDE_LAYOUT_MIN_WIDTH) {
+                Row(Modifier.fillMaxSize()) {
+                    Column(Modifier.weight(1f).fillMaxHeight()) {
+                        EditorTopBar(state)
+                        EditorPreviewArea(
+                            state = state,
+                            images = images,
+                            modifier = Modifier.fillMaxWidth().weight(1f),
+                        )
+                        EditorBottomBar(
+                            state = state,
+                            onUndo = onUndo,
+                            onRedo = onRedo,
+                            onBeforeChanged = onBeforeChanged,
+                            onExport = onExport,
+                            modifier = Modifier.fillMaxWidth().background(EditorPalette.panel),
+                        )
+                    }
+                    // 区切り線（装飾のみ）。
+                    Box(Modifier.width(1.dp).fillMaxHeight().background(EditorPalette.line))
+                    toolPanel(Modifier.width(TOOL_PANEL_WIDE_WIDTH).fillMaxHeight())
+                }
+            } else {
+                Column(Modifier.fillMaxSize()) {
+                    EditorTopBar(state)
+                    EditorPreviewArea(
+                        state = state,
+                        images = images,
+                        modifier = Modifier.fillMaxWidth().weight(1f),
+                    )
+                    toolPanel(Modifier.fillMaxWidth().heightIn(max = 360.dp))
+                    EditorBottomBar(
+                        state = state,
+                        onUndo = onUndo,
+                        onRedo = onRedo,
+                        onBeforeChanged = onBeforeChanged,
+                        onExport = onExport,
+                        modifier = Modifier.fillMaxWidth().background(EditorPalette.panel),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * プレビュー領域（プレビュー + 降格警告）。F3 の 2 レイアウトで同一の内容を共有する。
+ */
+@Composable
+private fun EditorPreviewArea(
+    state: EditorViewModel.EditorState,
+    images: EditorViewModel.EditorImages,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier = modifier) {
         PreviewPane(
             images = images,
             showBefore = state.showBefore,
             renderFailure = state.renderFailure,
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f),
+            modifier = Modifier.fillMaxWidth().weight(1f),
         )
         if (state.renderWarnings.contains(com.imageshot.core.render.RecipeDetailApplier.DEGRADED_WARNING)) {
             // PR-28c: 性能契約（自動降格）の明示。ADR-014 の UI 警告経路の初結線（限定）。
@@ -126,37 +229,6 @@ fun EditorScreen(
                     .padding(horizontal = 12.dp, vertical = 4.dp),
             )
         }
-        ToolPanel(
-            state = state,
-            onSliderPreview = onSliderPreview,
-            onSliderCommit = onSliderCommit,
-            onCurvePreview = onCurvePreview,
-            onCurveCommit = onCurveCommit,
-            onCurveReset = onCurveReset,
-            onCurveChannelSelect = onCurveChannelSelect,
-            onGeometryRotate = onGeometryRotate,
-            onGeometryFlip = onGeometryFlip,
-            onGeometryCrop = onGeometryCrop,
-            onGeometryResetCrop = onGeometryResetCrop,
-            onGeometryAngle = onGeometryAngle,
-            onGeometryAngleReset = onGeometryAngleReset,
-            onGeometryCropNudge = onGeometryCropNudge,
-            onGeometryCropScale = onGeometryCropScale,
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(max = 360.dp)
-                .background(EditorPalette.panel),
-        )
-        EditorBottomBar(
-            state = state,
-            onUndo = onUndo,
-            onRedo = onRedo,
-            onBeforeChanged = onBeforeChanged,
-            onExport = onExport,
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(EditorPalette.panel),
-        )
     }
 }
 
@@ -322,6 +394,9 @@ private enum class EditorToolTab(val labelRes: Int, val hintRes: Int?, val imple
 @Composable
 private fun ToolPanel(
     state: EditorViewModel.EditorState,
+    /** 選択中タブ（レイアウト分岐で消えないよう EditorScreen 側が保持する）。 */
+    selectedTab: EditorToolTab,
+    onSelectTab: (EditorToolTab) -> Unit,
     onSliderPreview: (AdjustmentId, Double) -> Unit,
     onSliderCommit: (AdjustmentId, Double) -> Unit,
     onCurvePreview: (List<List<Double>>) -> Unit,
@@ -338,7 +413,6 @@ private fun ToolPanel(
     onGeometryCropScale: (Double) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var selected by remember { mutableStateOf(EditorToolTab.BASIC) }
     var historyOpen by remember { mutableStateOf(false) }
     Column(
         modifier = modifier
@@ -346,21 +420,25 @@ private fun ToolPanel(
             .padding(horizontal = 12.dp, vertical = 8.dp),
     ) {
         // タブ行（未実装タブも選択可能 — 「未実装」と明示表示するため。成功装いの表示はしない）。
+        // PR-30: 2ペイン時のツールパネルは幅 360dp のため、タブ 6 個が横に収まらない。
+        // 折返しではなく横スクロールにして、全タブ（局部補正の未実装表示を含む）へ到達可能にする。
         Row(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
         ) {
             EditorToolTab.entries.forEach { tab ->
                 ToolTab(
                     label = stringResource(tab.labelRes),
                     hint = tab.hintRes?.let { stringResource(it) },
                     implemented = tab.implemented,
-                    selected = selected == tab,
-                    onClick = { selected = tab },
+                    selected = selectedTab == tab,
+                    onClick = { onSelectTab(tab) },
                 )
             }
         }
-        when (selected) {
+        when (selectedTab) {
             EditorToolTab.BASIC -> BasicAdjustmentsContent(state, onSliderPreview, onSliderCommit)
             EditorToolTab.CURVE -> MasterCurveContent(
                 state = state,
@@ -1327,3 +1405,11 @@ private fun EditorBottomBar(
         }
     }
 }
+
+// --------------------------------------------------------------- 適応レイアウト（F3）
+
+/** F3（PR-30）: プレビューとツールパネルを横並びにする最小幅（material3 の expanded 相当）。 */
+private val WIDE_LAYOUT_MIN_WIDTH = 840.dp
+
+/** F3（PR-30）: 横並び時のツールパネル幅（スライダー名+値が折り返さず収まる最小幅）。 */
+private val TOOL_PANEL_WIDE_WIDTH = 360.dp

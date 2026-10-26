@@ -7,14 +7,19 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -22,6 +27,7 @@ import androidx.compose.runtime.key
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import com.imageshot.core.model.ErrorCode
 import com.imageshot.core.model.ExportProgress
 import com.imageshot.feature.export.R as ExportR
 
@@ -45,55 +51,64 @@ fun ExportScreen(
     onEnqueue: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .verticalScroll(rememberScrollState())
-            .padding(12.dp),
-    ) {
-        Text(stringResource(ExportR.string.export_title), style = MaterialTheme.typography.titleLarge)
-        Text(
-            stringResource(ExportR.string.export_pipeline_note),
-            style = MaterialTheme.typography.labelSmall,
-        )
-        Text(
-            // PR-23 実装後の現実を反映（旧「EXIF pass-through 未実装」文言は撤去）。
-            stringResource(ExportR.string.export_support_note),
-            style = MaterialTheme.typography.labelSmall,
-        )
+    // G3（PR-30）: ホストの一括 systemBarsPadding を廃止したため、この画面が Scaffold で
+    // inset を持つ。safeDrawing は IME を含むので、ソフトキーボードが出ても内容が隠れない。
+    Scaffold(
+        modifier = modifier.fillMaxSize(),
+        contentWindowInsets = WindowInsets.safeDrawing,
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .consumeWindowInsets(innerPadding)
+                .verticalScroll(rememberScrollState())
+                .padding(12.dp),
+        ) {
+            Text(stringResource(ExportR.string.export_title), style = MaterialTheme.typography.titleLarge)
+            Text(
+                stringResource(ExportR.string.export_pipeline_note),
+                style = MaterialTheme.typography.labelSmall,
+            )
+            Text(
+                // PR-23 実装後の現実を反映（旧「EXIF pass-through 未実装」文言は撤去）。
+                stringResource(ExportR.string.export_support_note),
+                style = MaterialTheme.typography.labelSmall,
+            )
 
-        TargetDocumentRow(settings.document, settings.documentError)
+            TargetDocumentRow(settings.document, settings.documentError)
 
-        FormatSelector(
-            format = settings.format,
-            onFormatSelected = onFormatSelected,
-        )
+            FormatSelector(
+                format = settings.format,
+                onFormatSelected = onFormatSelected,
+            )
 
-        QualitySection(
-            format = settings.format,
-            quality = settings.quality,
-            onQualityChanged = onQualityChanged,
-        )
+            QualitySection(
+                format = settings.format,
+                quality = settings.quality,
+                onQualityChanged = onQualityChanged,
+            )
 
-        DestinationSection(
-            mime = settings.format.mime,
-            suggestedName = suggestedName(settings),
-            destinationUri = settings.destinationUri,
-            onPicked = onDestinationPicked,
-        )
+            DestinationSection(
+                mime = settings.format.mime,
+                suggestedName = suggestedName(settings),
+                destinationUri = settings.destinationUri,
+                onPicked = onDestinationPicked,
+            )
 
-        Row(Modifier.padding(vertical = 8.dp)) {
-            Button(
-                onClick = onEnqueue,
-                enabled = settings.destinationUri != null &&
-                    settings.document != null &&
-                    !settings.enqueuing,
-            ) {
-                Text(stringResource(if (settings.enqueuing) ExportR.string.export_enqueuing else ExportR.string.export_button_enqueue))
+            Row(Modifier.padding(vertical = 8.dp)) {
+                Button(
+                    onClick = onEnqueue,
+                    enabled = settings.destinationUri != null &&
+                        settings.document != null &&
+                        !settings.enqueuing,
+                ) {
+                    Text(stringResource(if (settings.enqueuing) ExportR.string.export_enqueuing else ExportR.string.export_button_enqueue))
+                }
             }
-        }
 
-        JobsSection(jobs)
+            JobsSection(jobs)
+        }
     }
 }
 
@@ -215,14 +230,28 @@ private fun JobsSection(jobs: List<ExportProgress>) {
                         progress = { job.progress / 100f },
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    job.errorCode?.let {
-                        Text(stringResource(ExportR.string.export_job_error, it.name), style = MaterialTheme.typography.labelSmall)
+                    job.errorCode?.let { code ->
+                        Text(
+                            text = stringResource(ExportR.string.export_job_error, exportErrorReason(code)),
+                            style = MaterialTheme.typography.labelSmall,
+                        )
                     }
                     Spacer(Modifier.padding(2.dp))
                 }
             }
         }
     }
+}
+
+/**
+ * G2（PR-30）: 書き出し失敗理由の表示文言。URI 失効は ExportWorker が
+ * `availability != ok` を弾く経路（§8.1）なので、原因と復旧導線を日本語で明示する。
+ * 未対応コードは列挙名のまま出す（失敗を黙って握り潰さない・ADR-014）。
+ */
+@Composable
+private fun exportErrorReason(code: ErrorCode): String = when (code) {
+    ErrorCode.URI_REVOKED -> stringResource(ExportR.string.export_error_uri_revoked)
+    else -> code.name
 }
 
 /** SAF 提案名（選択はユーザー側で上書き可否を含め最終決定・OS は新規文書のみ作成）。 */

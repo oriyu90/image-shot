@@ -28,4 +28,6 @@
     <string name="export_jobs_title">ジョブ一覧</string>
     <string name="export_jobs_empty">ジョブはありません</string>
     <string name="export_job_error">エラー: %1$s</string>
+    <!-- PR-30 G2: 失敗理由のうち URI 失効だけは原因と復旧導線を明示する（他は列挙名のまま）。 -->
+    <string name="export_error_uri_revoked">入力写真の URI 権限が失効しています。ライブラリで「再関連付け」から再接続してから、もう一度書き出してください。</string>
 </resources>

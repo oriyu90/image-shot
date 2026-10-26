@@ -14,3 +14,4 @@ captures/
 # 画面証跡（AGENTS: shots/ のみ・Git 管理外）
 shots/
 .kotlin/
+.agent-state
