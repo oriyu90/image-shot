@@ -14,6 +14,7 @@ import com.imageshot.core.model.EditNodeSpecs
 import com.imageshot.core.model.EditRecipe
 import com.imageshot.core.model.Strings
 import com.imageshot.core.model.ImageOpResult
+import com.imageshot.core.model.MaskSpecs
 import com.imageshot.core.model.RecipeParameterEdit
 import com.imageshot.core.model.RenderRequest
 import com.imageshot.core.model.RenderResult
@@ -86,6 +87,18 @@ class EditorViewModel(
         val curveChannel: CurveChannel = CurveChannel.MASTER,
         /** ジオメトリ（回転/反転/クロップ）の確定済み絶対状態。 */
         val geometry: EditRecipe.GeometryParams = EditRecipe.GeometryParams(),
+        /**
+         * 局所マスク（PR-29c）。レシピから復元し、ドラッグ中は一時プレビュー値で上書きされる。
+         * 順序はレシピと同じ（描画順＝適用順）。
+         */
+        val masks: List<EditRecipe.MaskNode> = emptyList(),
+        /**
+         * 選択中マスク（overlay のハンドル表示・パネル編集の対象）。
+         * UI セッション状態で、履歴・DB には保存しない（undo で消えたマスクは非選択へ落ちる）。
+         */
+        val selectedMaskId: String? = null,
+        /** brush の半径（ツール設定・正規化。マスク内容ではないため履歴を作らない）。 */
+        val brushRadius: Double = MaskDraft.DEFAULT_BRUSH_RADIUS,
         val history: List<HistoryRow> = emptyList(),
         val canUndo: Boolean = false,
         val canRedo: Boolean = false,
@@ -118,6 +131,22 @@ class EditorViewModel(
      * master のみ / チャンネルのいずれの編集でもこの単一フローを使い、差し替え点だけが違う。
      */
     private val transientCurve = MutableStateFlow<EditRecipe.Curve?>(null)
+    /**
+     * マスクのドラッグ中一時値（全量・正規化済み）。確定/失敗でクリアする。
+     * `null` = 一時値なし（レシピの masks を表示）。空リストは「全削除の一時状態」なので
+     * `null` と区別する（空リストでレシピへフォールバックしない）。
+     */
+    private val transientMasks = MutableStateFlow<List<EditRecipe.MaskNode>?>(null)
+    /** 選択中マスク（UI セッション状態・DB 保存なし）。 */
+    private val selectedMaskId = MutableStateFlow<String?>(null)
+    /** brush 半径（ツール設定・UI セッション状態）。 */
+    private val brushRadius = MutableStateFlow(MaskDraft.DEFAULT_BRUSH_RADIUS)
+    /**
+     * brush の 1 ジェスチャ中に未確定のストローク（maskId ごと）。
+     * ドラッグ中の見た目は [transientMasks] に畳み、確定時に 1 イベントへまとめる。
+     */
+    private var brushPendingMaskId: String? = null
+    private var brushPending: List<EditRecipe.BrushStroke> = emptyList()
     /** 選択中のカーブチャンネル（chips・UI セッション状態。DB には保存しない）。 */
     private val selectedCurveChannel = MutableStateFlow(CurveChannel.MASTER)
     private val history = MutableStateFlow<List<HistoryRow>>(emptyList())
@@ -183,6 +212,9 @@ class EditorViewModel(
             curve = projection.curve,
             curveChannel = projection.curveChannel,
             geometry = projection.geometry,
+            masks = projection.masks,
+            selectedMaskId = projection.selectedMaskId,
+            brushRadius = projection.brushRadius,
             history = rows,
             canUndo = session.canUndo,
             canRedo = session.canRedo,
@@ -449,6 +481,141 @@ class EditorViewModel(
         showBefore.value = active
     }
 
+    // ----- 局所マスク（PR-29c・D3）-----
+
+    /**
+     * マスク追加（**1 追加 = 1 履歴イベント**）。既定形状は [MaskDraft]。
+     * 上限 [MaskSpecs.MAX_MASKS] では何もしない（UI も追加ボタンを無効化する）。
+     * 追加したマスクを選択状態にする（すぐ overlay で編集できる）。
+     */
+    fun onMaskAdd(type: String) {
+        val current = recipe.value?.masks ?: return
+        if (current.size >= MaskSpecs.MAX_MASKS) return
+        val node = MaskDraft.create(type) ?: return
+        selectedMaskId.value = node.maskId
+        commitMasks(current + node, node.maskId)
+    }
+
+    /** 選択マスクの切替（UI セッション状態・イベントは作らない）。 */
+    fun onMaskSelect(maskId: String?) {
+        selectedMaskId.value = maskId
+    }
+
+    /** マスク削除（**1 削除 = 1 履歴イベント**・選択は解除）。 */
+    fun onMaskRemove(maskId: String) {
+        val current = recipe.value?.masks ?: return
+        if (current.none { it.maskId == maskId }) return
+        if (selectedMaskId.value == maskId) selectedMaskId.value = null
+        commitMasks(current.filterNot { it.maskId == maskId }, null)
+    }
+
+    /**
+     * マスク全量のドラッグ中プレビュー（履歴に書かない・DRAFT 再描画のみ）。
+     * 空リストは「全削除の一時状態」であり有効値（null と区別する）。
+     */
+    fun onMaskPreview(masks: List<EditRecipe.MaskNode>) {
+        val normalized = MaskSpecs.normalizeAll(masks) ?: return
+        dragging.value = true
+        transientMasks.value = normalized
+        val now = System.currentTimeMillis()
+        if (now - lastDraftAt >= DRAFT_INTERVAL_MS) {
+            lastDraftAt = now
+            scheduleRender(RenderTarget.PREVIEW, RenderRequest.Quality.DRAFT, draftRecipe())
+        }
+    }
+
+    /**
+     * マスク全量の確定（**1 操作 = 1 履歴イベント**・楽観排他は [EditStore.commitMasks]）。
+     * 確定値と実質同一ならイベントを作らない（スライダーの `onSliderCommit` と同じ流儀）。
+     */
+    fun onMaskCommit(masks: List<EditRecipe.MaskNode>, maskId: String?) {
+        dragging.value = false
+        val normalized = MaskSpecs.normalizeAll(masks)
+        if (normalized == null) {
+            // ドラッグの残滓が不正: 一時値を捨てて確定状態へ戻す（既定値へ落とさない）。
+            transientMasks.value = null
+            clearBrushPending()
+            recipe.value?.let { scheduleRender(RenderTarget.PREVIEW, RenderRequest.Quality.PREVIEW, it) }
+            return
+        }
+        if (normalized == recipe.value?.masks) {
+            transientMasks.value = null
+            clearBrushPending()
+            recipe.value?.let { scheduleRender(RenderTarget.PREVIEW, RenderRequest.Quality.PREVIEW, it) }
+            return
+        }
+        commitMasks(normalized, maskId)
+    }
+
+    /** マスク内 adjustments のドラッグ中プレビュー（表示値を受ける）。 */
+    fun onMaskAdjustPreview(maskId: String, path: String, value: Double) {
+        adjustMask(maskId, path, value, commit = false)
+    }
+
+    /** マスク内 adjustments の確定（1 スライダー操作 = 1 履歴イベント）。 */
+    fun onMaskAdjustCommit(maskId: String, path: String, value: Double) {
+        adjustMask(maskId, path, value, commit = true)
+    }
+
+    /** マスク内 adjustments を全消去（=「0 に戻す」・マスク調整のみ・他の補正は不変）。 */
+    fun onMaskResetAdjustments(maskId: String) {
+        updateMask(maskId, commit = true) { node ->
+            if (node.adjustments.isEmpty()) node else node.copy(adjustments = emptyMap())
+        }
+    }
+
+    /** feather / angleDeg のドラッグ中プレビュー（angleDeg は表示 -180..180 を受ける）。 */
+    fun onMaskParamPreview(maskId: String, key: String, value: Double) {
+        setMaskParam(maskId, key, value, commit = false)
+    }
+
+    /** feather / angleDeg の確定（1 スライダー操作 = 1 履歴イベント）。 */
+    fun onMaskParamCommit(maskId: String, key: String, value: Double) {
+        setMaskParam(maskId, key, value, commit = true)
+    }
+
+    /**
+     * brush の 1 点プレビュー（ドラッグ中）。点は [MaskBrushSampler] の間引き済みを渡す。
+     * ジェスチャ中のストロークは VM が保持し、確定時にまとめて 1 イベントにする。
+     */
+    fun onMaskBrushAddPreview(maskId: String, stroke: EditRecipe.BrushStroke) {
+        val base = transientMasks.value ?: recipe.value?.masks ?: return
+        val index = base.indexOfFirst { it.maskId == maskId }
+        if (index < 0) return
+        val node = base[index]
+        val strokes = accumulateBrush(maskId, stroke, node) ?: return
+        val updated = base.toMutableList().also { it[index] = node.copy(brushStrokes = strokes) }
+        onMaskPreview(updated)
+    }
+
+    /**
+     * brush のジェスチャ確定（**1 ジェスチャ = 1 履歴イベント**）。
+     * 上限 [MaskSpecs.MAX_BRUSH_STROKES] を超える点は取り込まない（[MaskBrushSampler] が ignore）。
+     */
+    fun onMaskBrushAddCommit(maskId: String, stroke: EditRecipe.BrushStroke) {
+        val base = recipe.value?.masks ?: return
+        val index = base.indexOfFirst { it.maskId == maskId }
+        if (index < 0) {
+            clearBrushPending()
+            return
+        }
+        val node = base[index]
+        val pending = if (brushPendingMaskId == maskId) brushPending else emptyList()
+        val withFinal = MaskBrushSampler.append(node.brushStrokes + pending, stroke)
+        val merged = withFinal.drop(node.brushStrokes.size)
+        clearBrushPending()
+        if (merged.isEmpty()) return
+        onMaskCommit(
+            base.toMutableList().also { it[index] = node.copy(brushStrokes = node.brushStrokes + merged) },
+            maskId,
+        )
+    }
+
+    /** brush の半径（ツール設定・履歴を作らない・[EditorState.brushRadius] に反映）。 */
+    fun onMaskBrushRadius(radius: Double) {
+        brushRadius.value = MaskDraft.clampBrushRadius(radius)
+    }
+
     // ----- 内部実装 -----
 
     private data class SessionUi(
@@ -460,34 +627,49 @@ class EditorViewModel(
         val saveFailure: String?,
     )
 
-    /** 下部パネルへの一次投影（スライダー値・カーブ・ジオメトリ。combine 段数の集約のため導入）。 */
+    /** 下部パネルへの一次投影（スライダー値・カーブ・ジオメトリ・マスク。combine 段数の集約のため導入）。 */
     private data class PanelProjection(
         val sliders: List<SliderBind>,
         /** 選択チャンネルの一時値を差し替えた後のカーブ全量。 */
         val curve: EditRecipe.Curve,
         val curveChannel: CurveChannel,
         val geometry: EditRecipe.GeometryParams,
+        /** 確定値 or ドラッグ中一時値（順序はレシピ＝適用順）。 */
+        val masks: List<EditRecipe.MaskNode>,
+        /** 選択中マスク（[masks] に存在しない ID は null へ落とす）。 */
+        val selectedMaskId: String?,
+        val brushRadius: Double,
     )
 
     private fun panelProjection() = combine(
         recipe.asStateFlow(),
         transient.asStateFlow(),
-        transientCurve.asStateFlow(),
-        selectedCurveChannel.asStateFlow(),
-    ) { base, overrides, curveOverride, curveChannel ->
+        combine(transientCurve.asStateFlow(), selectedCurveChannel.asStateFlow()) { curve, channel ->
+            curve to channel
+        },
+        transientMasks.asStateFlow(),
+        combine(selectedMaskId.asStateFlow(), brushRadius.asStateFlow()) { maskId, radius ->
+            maskId to radius
+        },
+    ) { base, overrides, curveState, maskOverride, maskSession ->
         val effective = base ?: defaultRecipe(null)
+        val masks = maskOverride ?: effective.masks
+        val selected = maskSession.first?.takeIf { id -> masks.any { it.maskId == id } }
         PanelProjection(
             sliders = AdjustmentId.entries.map { id ->
                 SliderBind(id, overrides[id] ?: id.sliderValueOf(effective))
             },
-            curve = curveOverride ?: effective.develop.curve,
-            curveChannel = curveChannel,
+            curve = curveState.first ?: effective.develop.curve,
+            curveChannel = curveState.second,
             geometry = effective.geometry,
+            masks = masks,
+            selectedMaskId = selected,
+            brushRadius = maskSession.second,
         )
     }
 
     /**
-     * 確定共通経路（スライダー / カーブ / ジオメトリで同一契約）。
+     * 確定共通経路（スライダー / カーブ / ジオメトリ / マスクで同一契約）。
      * 失効（stale baseRevision）等: 無通知続行せず失敗を明示し、正本へ再同期（NFR-06）。
      */
     private fun commitToStore(source: String, action: suspend (String) -> ImageOpResult<EditStore.EditStoreState>) {
@@ -529,6 +711,82 @@ class EditorViewModel(
         commitToStore("geometry") { docId ->
             editStore.commitGeometry(docId, committedRevision, geometry)
         }
+    }
+
+    // ----- 局所マスクの内部共通経路（PR-29c）-----
+
+    /** マスク全量の確定（スライダー/カーブ/ジオメトリと同じ失敗時契約を commitToStore に委譲）。 */
+    private fun commitMasks(masks: List<EditRecipe.MaskNode>, maskId: String?) {
+        commitToStore("mask") { docId ->
+            editStore.commitMasks(docId, committedRevision, masks, maskId)
+        }
+    }
+
+    /**
+     * 対象マスク 1 件だけを差し替えて preview/commit の共通経路へ流す。
+     * 基底はドラッグ中の一時値（あれば）を使い、連続操作で他の値を巻き戻さない。
+     */
+    private fun updateMask(
+        maskId: String,
+        commit: Boolean,
+        transform: (EditRecipe.MaskNode) -> EditRecipe.MaskNode,
+    ) {
+        val base = transientMasks.value ?: recipe.value?.masks ?: return
+        val index = base.indexOfFirst { it.maskId == maskId }
+        if (index < 0) return
+        val updated = base.toMutableList()
+        updated[index] = transform(updated[index])
+        if (commit) onMaskCommit(updated, maskId) else onMaskPreview(updated)
+    }
+
+    /** adjustments の表示値 → レシピ値（範囲クランプ）→ 1 マスクの map 差し替え。 */
+    private fun adjustMask(maskId: String, path: String, value: Double, commit: Boolean) {
+        val spec = MaskAdjustments.spec(path) ?: return
+        val recipeValue = MaskAdjustments.toRecipe(spec, value) ?: return
+        updateMask(maskId, commit) { node ->
+            node.copy(adjustments = node.adjustments + (path to recipeValue))
+        }
+    }
+
+    /** feather / angleDeg の書き込み（許可キー以外は無視・angleDeg は表示 → [0,360)）。 */
+    private fun setMaskParam(maskId: String, key: String, value: Double, commit: Boolean) {
+        val base = transientMasks.value ?: recipe.value?.masks ?: return
+        val node = base.firstOrNull { it.maskId == maskId } ?: return
+        if (key !in MaskSpecs.paramKeys(node.maskType).orEmpty()) return
+        val fallback = node.parameters[key] ?: MaskSpecs.MIN_FEATHER
+        val next = when (key) {
+            MaskSpecs.KEY_FEATHER -> MaskSlider.feather(value, fallback)
+            MaskSpecs.KEY_ANGLE_DEG -> MaskSlider.angleSaved(value)
+            else -> return
+        }
+        updateMask(maskId, commit) { target ->
+            target.copy(parameters = target.parameters + (key to next))
+        }
+    }
+
+    /**
+     * ジェスチャ中の brush ストロークを 1 本の pending 列へ積む。
+     * 追加できなければ null（不正値・重複・上限）。
+     */
+    private fun accumulateBrush(
+        maskId: String,
+        stroke: EditRecipe.BrushStroke,
+        node: EditRecipe.MaskNode,
+    ): List<EditRecipe.BrushStroke>? {
+        if (brushPendingMaskId != maskId) {
+            brushPendingMaskId = maskId
+            brushPending = emptyList()
+        }
+        val combined = node.brushStrokes + brushPending
+        val next = MaskBrushSampler.append(combined, stroke)
+        if (next.size == combined.size) return null
+        brushPending = next.drop(node.brushStrokes.size)
+        return next
+    }
+
+    private fun clearBrushPending() {
+        brushPendingMaskId = null
+        brushPending = emptyList()
     }
 
     /**
@@ -599,6 +857,9 @@ class EditorViewModel(
         committedRevision = state.currentRevision
         revision.value = state.currentRevision
         recipe.value = state.recipe
+        // 確定状態へ戻ったため、マスクの一時値・未確定ストロークは破棄する（undo/redo/復元含む）。
+        transientMasks.value = null
+        clearBrushPending()
         history.value = state.history.map { item -> historyRow(item) }
         canUndo.value = state.canUndo
         canRedo.value = state.canRedo
@@ -620,12 +881,13 @@ class EditorViewModel(
         }
     }
 
-    /** 一時値を仮レシピへ合成（DB には触れない）。カーブ一時値（選択チャンネル差し替え全量）も同様に差し替える。 */
+    /** 一時値を仮レシピへ合成（DB には触れない）。カーブ/マスクの一時値も同様に差し替える。 */
     private fun draftRecipe(): EditRecipe {
         val base = recipe.value ?: defaultRecipe(null)
         var out = base
         transient.value.forEach { (id, v) -> out = id.apply(out, v) }
         transientCurve.value?.let { out = out.copy(develop = out.develop.copy(curve = it)) }
+        transientMasks.value?.let { out = out.copy(masks = it) }
         return out
     }
 
@@ -678,6 +940,11 @@ class EditorViewModel(
                     ).filterNotNull().joinToString("・")
                     strings.get(EditorR.string.editor_history_geometry, opLabel, detail)
                 }
+            }
+            item.eventType == EditEventKind.LOCAL.id -> {
+                // マスクは差分ではなく絶対状態（イベント時点の全マスク）を保持するため、
+                // 件数で要約する（payload JSON は UI に露出しない）。
+                strings.get(EditorR.string.editor_history_mask, opLabel, item.masks?.size ?: 0)
             }
             id == null -> strings.get(
                         EditorR.string.editor_history_by_path,

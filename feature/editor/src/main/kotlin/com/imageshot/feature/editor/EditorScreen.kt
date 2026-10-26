@@ -1,6 +1,5 @@
 package com.imageshot.feature.editor
 
-import androidx.annotation.StringRes
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -45,16 +44,24 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathFillType
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.input.KeyboardType
@@ -65,8 +72,10 @@ import com.imageshot.feature.editor.R as EditorR
 import com.imageshot.core.model.EditEventKind
 import com.imageshot.core.model.EditNodeSpecs
 import com.imageshot.core.model.EditRecipe
+import com.imageshot.core.model.MaskSpecs
 import com.imageshot.core.render.RecipeCurve
 import kotlin.math.roundToInt
+import kotlin.math.sqrt
 
 /**
  * 編集画面（01_製品仕様書.md §4.3 視覚仕様 / §10 U02 U03）。
@@ -76,11 +85,15 @@ import kotlin.math.roundToInt
  *   専用ホールドボタンで行う（ピンチ/パンとタップ長押しのジェスチャ競合を避ける）。
  * - 下部ツールタブ: 基本調整 / カーブ（master + R/G/B チャンネル・PR-28a） / HSL（8系統） /
  *   ジオメトリ（90°+微調整の回転・反転・プリセット比+移動/サイズのクロップ・PR-28b） /
- *   ディテール（シャープ・輝度NR・PR-28c）は実装。局部補正は未実装として明示表示。
- *   プレビュー上のエッジドラッグ・透視/レンズ補正は未実装（各タブ内で明示）。
+ *   ディテール（シャープ・輝度NR・PR-28c） / 局部補正（マスク・PR-29c）は実装。
+ *   プレビュー上のエッジドラッグ（クロップ）・透視/レンズ補正は未実装（各タブ内で明示）。
  * - スライダー操作はスキーマ（AdjustmentId）から生成。ドラッグ反映は即時、
  *   離した時点で1件確定（onDragEnd → EditStore.commit）。カーブは指を離した時点で
- *   絶対状態イベント確定、ジオメトリはボタン操作ごとに1件確定。
+ *   絶対状態イベント確定、ジオメトリ/マスクは操作ごとに1件確定。
+ * - 局部補正（PR-29c）: パネルでマスクの追加/選択/削除・feather/角度/ブラシ半径・
+ *   adjustments を編集し、プレビュー上に overlay（linear の A/B・radial の中心/rx/ry・brush の
+ *   軌跡）を重ねる。overlay は画像と同じ graphicsLayer（scale/offset）と `ContentScale.Fit` の
+ *   実表示矩形で写像するため、ズーム/パン中も座標が一致する。
  * - Undo/Redo/履歴一覧: DB 正本（EditStoreState）の表示。
  * - PR-30: G3（画面ルートが Scaffold で inset を自己管理・ホストの一括 padding を廃止）と
  *   F3（幅 840dp 以上でプレビューとツールパネルを横並び。ロジックは不変・配置のみ）を反映。
@@ -103,6 +116,11 @@ fun EditorScreen(
     onGeometryAngleReset: () -> Unit,
     onGeometryCropNudge: (Double, Double) -> Unit,
     onGeometryCropScale: (Double) -> Unit,
+    /**
+     * 局部補正（マスク・PR-29c）の配線一式。個々の判断は VM が持ち、画面は
+     * 「表示＋操作の転送」だけを行う（[EditorMaskActions] の KDoc 参照）。
+     */
+    maskActions: EditorMaskActions,
     onUndo: () -> Unit,
     onRedo: () -> Unit,
     onBeforeChanged: (Boolean) -> Unit,
@@ -152,6 +170,7 @@ fun EditorScreen(
                     onGeometryAngleReset = onGeometryAngleReset,
                     onGeometryCropNudge = onGeometryCropNudge,
                     onGeometryCropScale = onGeometryCropScale,
+                    maskActions = maskActions,
                     modifier = panelModifier.background(EditorPalette.panel),
                 )
             }
@@ -163,6 +182,8 @@ fun EditorScreen(
                         EditorPreviewArea(
                             state = state,
                             images = images,
+                            maskActions = maskActions,
+                            overlayEnabled = toolTab == EditorToolTab.LOCAL,
                             modifier = Modifier.fillMaxWidth().weight(1f),
                         )
                         EditorBottomBar(
@@ -184,6 +205,8 @@ fun EditorScreen(
                     EditorPreviewArea(
                         state = state,
                         images = images,
+                        maskActions = maskActions,
+                        overlayEnabled = toolTab == EditorToolTab.LOCAL,
                         modifier = Modifier.fillMaxWidth().weight(1f),
                     )
                     toolPanel(Modifier.fillMaxWidth().heightIn(max = 360.dp))
@@ -203,11 +226,15 @@ fun EditorScreen(
 
 /**
  * プレビュー領域（プレビュー + 降格警告）。F3 の 2 レイアウトで同一の内容を共有する。
+ * [overlayEnabled] は「局部補正タブが選択されている」ことを示し、マスクの overlay 表示を
+ * そのタブにだけ限定する（他タブの操作をハンドルが邪魔しない）。
  */
 @Composable
 private fun EditorPreviewArea(
     state: EditorViewModel.EditorState,
     images: EditorViewModel.EditorImages,
+    maskActions: EditorMaskActions,
+    overlayEnabled: Boolean,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier = modifier) {
@@ -215,6 +242,11 @@ private fun EditorPreviewArea(
             images = images,
             showBefore = state.showBefore,
             renderFailure = state.renderFailure,
+            masks = state.masks,
+            selectedMaskId = state.selectedMaskId,
+            brushRadius = state.brushRadius,
+            overlayEnabled = overlayEnabled,
+            maskActions = maskActions,
             modifier = Modifier.fillMaxWidth().weight(1f),
         )
         if (state.renderWarnings.contains(com.imageshot.core.render.RecipeDetailApplier.DEGRADED_WARNING)) {
@@ -304,6 +336,12 @@ private fun PreviewPane(
     images: EditorViewModel.EditorImages,
     showBefore: Boolean,
     renderFailure: String?,
+    masks: List<EditRecipe.MaskNode>,
+    selectedMaskId: String?,
+    brushRadius: Double,
+    /** 局部補正タブ選択中のみ true（overlay の表示/操作を限定する）。 */
+    overlayEnabled: Boolean,
+    maskActions: EditorMaskActions,
     modifier: Modifier = Modifier,
 ) {
     // §4.3: ピンチズーム 1:1/フィット/拡大 と二本指パン（M1 は 1x..8x の連続域）。
@@ -336,6 +374,22 @@ private fun PreviewPane(
                         translationY = offset.y
                     },
             )
+            // マスク overlay（PR-29c）。画像と同一の graphicsLayer を掛けるため、
+            // ズーム/パン中も正規化座標↔画面座標の写像がずれない。Before 表示中は
+            // 既定値レシピ（マスク無し）なので overlay も出さない。
+            if (overlayEnabled && !showBefore) {
+                MaskOverlay(
+                    imageWidth = shown.width,
+                    imageHeight = shown.height,
+                    masks = masks,
+                    selectedMaskId = selectedMaskId,
+                    brushRadius = brushRadius,
+                    scale = scale,
+                    offset = offset,
+                    actions = maskActions,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
         } else {
             Text(
                 text = stringResource(EditorR.string.editor_generating_preview),
@@ -379,16 +433,324 @@ private fun PreviewPane(
     }
 }
 
+// --------------------------------------------------------------- マスク overlay（PR-29c）
+
+/** ハンドルの当たり判定（48dp 相当 = 半径 24dp）。 */
+private const val MASK_HANDLE_TOUCH_DP = 48
+
+/** ハンドルの描画半径。 */
+private val MASK_HANDLE_RADIUS = 7.dp
+
+/** 形状線・ハンドル枠の線幅。 */
+private val MASK_STROKE_WIDTH = 1.5.dp
+
+/**
+ * プレビュー上のマスク overlay（PR-29c）。
+ *
+ * 座標写像:
+ * - 画像は `ContentScale.Fit` で描かれるため、実表示矩形を
+ *   [MaskOverlayGeometry.fitRect]（画像寸法と Canvas 寸法から算出）で求める。
+ * - この Canvas には Image と **同じ scale/offset の graphicsLayer** を掛ける。したがって
+ *   写像は「Canvas ローカル座標」で完結し、ズーム/パン中も正規化座標と一致する
+ *   （graphicsLayer の内側に pointerInput を置くため、ドラッグ座標も逆変換済みのローカル値）。
+ * - 画像外（レターボックス）へドラッグした場合は [MaskOverlayGeometry.toNormalized] が
+ *   0..1 へクランプする（端で止まる）。
+ *
+ * 操作:
+ * - linear/radial: 選択マスクのハンドルをドラッグ（当たり判定 48dp・選択マスクのみ表示）。
+ *   ドラッグ中は `onPreview`、離した時点で `onCommit`（1 操作 = 1 履歴イベント）。
+ * - brush: 指の軌跡を半径間隔で間引いてストロークを追加（1 ジェスチャ = 1 commit・上限 256）。
+ *   2 本指のピンチとは競合しうる（実機確認項目）。
+ */
+@Composable
+private fun MaskOverlay(
+    imageWidth: Int,
+    imageHeight: Int,
+    masks: List<EditRecipe.MaskNode>,
+    selectedMaskId: String?,
+    brushRadius: Double,
+    scale: Float,
+    offset: Offset,
+    actions: EditorMaskActions,
+    modifier: Modifier = Modifier,
+) {
+    val touchRadiusPx = with(LocalDensity.current) { (MASK_HANDLE_TOUCH_DP / 2).dp.toPx() }
+    var canvasSize by remember { mutableStateOf(IntSize.Zero) }
+    val rect = remember(canvasSize, imageWidth, imageHeight) {
+        MaskOverlayGeometry.fitRect(canvasSize.width, canvasSize.height, imageWidth, imageHeight)
+    }
+    // ジェスチャ中に最新の状態を読む（pointerInput のコルーチンはキー変更まで再起動しない）。
+    val latestMasks by rememberUpdatedState(masks)
+    val latestSelected by rememberUpdatedState(selectedMaskId)
+    val latestBrushRadius by rememberUpdatedState(brushRadius)
+    var dragKind by remember { mutableStateOf<MaskHandles.Kind?>(null) }
+    var brushLast by remember { mutableStateOf<EditRecipe.BrushStroke?>(null) }
+
+    Canvas(
+        modifier = modifier
+            .onSizeChanged { canvasSize = it }
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+                translationX = offset.x
+                translationY = offset.y
+            }
+            .pointerInput(rect, selectedMaskId, brushRadius) {
+                val fit = rect ?: return@pointerInput
+                fun node(): EditRecipe.MaskNode? =
+                    latestMasks.firstOrNull { it.maskId == latestSelected }
+
+                detectDragGestures(
+                    onDragStart = { position ->
+                        val target = node() ?: return@detectDragGestures
+                        if (target.maskType == MaskSpecs.TYPE_BRUSH) {
+                            val point = MaskOverlayGeometry.toNormalized(fit, position.x, position.y)
+                                ?: return@detectDragGestures
+                            val stroke = EditRecipe.BrushStroke(
+                                x = point.first,
+                                y = point.second,
+                                radius = latestBrushRadius,
+                                opacity = 1.0,
+                            )
+                            brushLast = stroke
+                            actions.onBrushAddPreview(target.maskId, stroke)
+                        } else {
+                            dragKind = MaskOverlayGeometry.nearestHandle(
+                                node = target,
+                                rect = fit,
+                                screenX = position.x,
+                                screenY = position.y,
+                                tolerancePx = touchRadiusPx,
+                            )
+                        }
+                    },
+                    onDrag = { change, _ ->
+                        val target = node() ?: return@detectDragGestures
+                        if (target.maskType == MaskSpecs.TYPE_BRUSH) {
+                            change.consume()
+                            val point = MaskOverlayGeometry.toNormalized(fit, change.position.x, change.position.y)
+                                ?: return@detectDragGestures
+                            if (!MaskBrushSampler.shouldAppend(
+                                    last = brushLast,
+                                    x = point.first,
+                                    y = point.second,
+                                    rect = fit,
+                                    radius = latestBrushRadius,
+                                )
+                            ) {
+                                return@detectDragGestures
+                            }
+                            val stroke = EditRecipe.BrushStroke(
+                                x = point.first,
+                                y = point.second,
+                                radius = latestBrushRadius,
+                                opacity = 1.0,
+                            )
+                            brushLast = stroke
+                            actions.onBrushAddPreview(target.maskId, stroke)
+                        } else {
+                            val kind = dragKind ?: return@detectDragGestures
+                            change.consume()
+                            val point = MaskOverlayGeometry.toNormalized(fit, change.position.x, change.position.y)
+                                ?: return@detectDragGestures
+                            val updated = latestMasks.map { item ->
+                                if (item.maskId == target.maskId) {
+                                    MaskHandles.move(item, kind, point.first, point.second)
+                                } else {
+                                    item
+                                }
+                            }
+                            actions.onPreview(updated)
+                        }
+                    },
+                    onDragEnd = {
+                        val target = node()
+                        if (target != null && target.maskType == MaskSpecs.TYPE_BRUSH) {
+                            brushLast?.let { stroke -> actions.onBrushAddCommit(target.maskId, stroke) }
+                        } else if (target != null && dragKind != null) {
+                            actions.onCommit(latestMasks, target.maskId)
+                        }
+                        dragKind = null
+                        brushLast = null
+                    },
+                    onDragCancel = {
+                        // キャンセル（2本指ジェスチャに奪われた等）でも、表示済みのプレビューを
+                        // 未確定のまま残さない: 終了時と同じ確定経路へ流す（実質無変化なら
+                        // VM がイベントを作らない）。
+                        val target = node()
+                        if (target != null && target.maskType == MaskSpecs.TYPE_BRUSH) {
+                            brushLast?.let { stroke -> actions.onBrushAddCommit(target.maskId, stroke) }
+                        } else if (target != null && dragKind != null) {
+                            actions.onCommit(latestMasks, target.maskId)
+                        }
+                        dragKind = null
+                        brushLast = null
+                    },
+                )
+            },
+    ) {
+        val fit = MaskOverlayGeometry.fitRect(
+            containerWidth = size.width.toInt(),
+            containerHeight = size.height.toInt(),
+            imageWidth = imageWidth,
+            imageHeight = imageHeight,
+        ) ?: return@Canvas
+        val strokeWidth = MASK_STROKE_WIDTH.toPx()
+        val handleRadius = MASK_HANDLE_RADIUS.toPx()
+        masks.forEach { node ->
+            val selected = node.maskId == selectedMaskId
+            val color = if (selected) EditorPalette.accent else EditorPalette.textSecondary.copy(alpha = 0.45f)
+            when (node.maskType) {
+                MaskSpecs.TYPE_LINEAR -> drawLinearMask(fit, node, color, strokeWidth)
+                MaskSpecs.TYPE_RADIAL -> drawRadialMask(fit, node, color, selected, strokeWidth)
+                MaskSpecs.TYPE_BRUSH -> drawBrushMask(fit, node, color, strokeWidth)
+            }
+            if (selected) {
+                MaskHandles.handlesOf(node).forEach { handle ->
+                    drawMaskHandle(fit, handle, handleRadius, strokeWidth)
+                }
+            }
+        }
+    }
+}
+
+/** linear: A/B 線＋feather 帯（境界線に直交・幅 = feather×|AB|）＋中点の境界線。 */
+private fun DrawScope.drawLinearMask(
+    rect: FitRect,
+    node: EditRecipe.MaskNode,
+    color: Color,
+    strokeWidth: Float,
+) {
+    val p = node.parameters
+    val x0 = p[MaskSpecs.KEY_X0] ?: return
+    val y0 = p[MaskSpecs.KEY_Y0] ?: return
+    val x1 = p[MaskSpecs.KEY_X1] ?: return
+    val y1 = p[MaskSpecs.KEY_Y1] ?: return
+    val a = MaskOverlayGeometry.toScreen(rect, x0, y0)
+    val b = MaskOverlayGeometry.toScreen(rect, x1, y1)
+    val feather = MaskSlider.feather(
+        p[MaskSpecs.KEY_FEATHER] ?: MaskSpecs.DEFAULT_LINEAR_FEATHER,
+        MaskSpecs.DEFAULT_LINEAR_FEATHER,
+    )
+    val bandWidth = MaskOverlayGeometry.linearBandWidthPx(rect, x0, y0, x1, y1, feather)
+    val midX = (a.x + b.x) / 2f
+    val midY = (a.y + b.y) / 2f
+    val dx = b.x - a.x
+    val dy = b.y - a.y
+    val length = sqrt(dx * dx + dy * dy).coerceAtLeast(1e-3f)
+    val nx = -dy / length
+    val ny = dx / length
+    // 画面全体を横切る長さ（画像外まで伸ばして帯を切らない）。
+    val extent = size.width + size.height
+    val start = Offset(midX - nx * extent, midY - ny * extent)
+    val end = Offset(midX + nx * extent, midY + ny * extent)
+    if (bandWidth > 0.5f) {
+        drawLine(color = color.copy(alpha = 0.12f), start = start, end = end, strokeWidth = bandWidth)
+    }
+    drawLine(color = color, start = start, end = end, strokeWidth = strokeWidth)
+    drawLine(
+        color = color.copy(alpha = 0.55f),
+        start = Offset(a.x, a.y),
+        end = Offset(b.x, b.y),
+        strokeWidth = strokeWidth,
+    )
+}
+
+/** radial: 楕円（angleDeg は「画面で時計回り」＝ core の順写像と一致）＋feather リング。 */
+private fun DrawScope.drawRadialMask(
+    rect: FitRect,
+    node: EditRecipe.MaskNode,
+    color: Color,
+    selected: Boolean,
+    strokeWidth: Float,
+) {
+    val p = node.parameters
+    val cx = p[MaskSpecs.KEY_CX] ?: return
+    val cy = p[MaskSpecs.KEY_CY] ?: return
+    val rx = p[MaskSpecs.KEY_RX] ?: return
+    val ry = p[MaskSpecs.KEY_RY] ?: return
+    val center = MaskOverlayGeometry.toScreen(rect, cx, cy)
+    val (rxPx, ryPx) = MaskOverlayGeometry.ellipseRadiiPx(rect, rx, ry)
+    if (rxPx <= 0f || ryPx <= 0f) return
+    val angleDeg = p[MaskSpecs.KEY_ANGLE_DEG] ?: MaskSpecs.DEFAULT_ANGLE_DEG
+    val feather = MaskSlider.feather(
+        p[MaskSpecs.KEY_FEATHER] ?: MaskSpecs.DEFAULT_RADIAL_FEATHER,
+        MaskSpecs.DEFAULT_RADIAL_FEATHER,
+    )
+    rotate(degrees = angleDeg.toFloat(), pivot = Offset(center.x, center.y)) {
+        val topLeft = Offset(center.x - rxPx, center.y - ryPx)
+        val outer = Size(rxPx * 2f, ryPx * 2f)
+        if (selected && feather > 0.0) {
+            val innerScale = (1.0 - feather).toFloat().coerceIn(0f, 1f)
+            val innerRx = rxPx * innerScale
+            val innerRy = ryPx * innerScale
+            val ring = Path().apply {
+                fillType = PathFillType.EvenOdd
+                addOval(Rect(topLeft, outer))
+                addOval(
+                    Rect(
+                        Offset(center.x - innerRx, center.y - innerRy),
+                        Size(innerRx * 2f, innerRy * 2f),
+                    ),
+                )
+            }
+            drawPath(ring, color = color.copy(alpha = 0.18f))
+        }
+        drawOval(color = color, topLeft = topLeft, size = outer, style = Stroke(width = strokeWidth))
+    }
+}
+
+/** brush: 各ストロークを半透明の円で表示（半径は短辺基準＝ core と同一）。 */
+private fun DrawScope.drawBrushMask(
+    rect: FitRect,
+    node: EditRecipe.MaskNode,
+    color: Color,
+    strokeWidth: Float,
+) {
+    node.brushStrokes.forEach { stroke ->
+        if (!stroke.x.isFinite() || !stroke.y.isFinite() || !stroke.radius.isFinite()) return@forEach
+        val center = MaskOverlayGeometry.toScreen(rect, stroke.x, stroke.y)
+        val radiusPx = MaskOverlayGeometry.brushRadiusPx(rect, stroke.radius)
+        val opacity = stroke.opacity.toFloat().coerceIn(0f, 1f)
+        drawCircle(
+            color = color.copy(alpha = 0.10f * opacity),
+            radius = radiusPx,
+            center = Offset(center.x, center.y),
+        )
+        drawCircle(
+            color = color.copy(alpha = 0.55f),
+            radius = radiusPx,
+            center = Offset(center.x, center.y),
+            style = Stroke(width = strokeWidth),
+        )
+    }
+}
+
+/** ハンドル（白丸＋強調色の枠・背景に暗い縁を付けて画像上でも視認できるようにする）。 */
+private fun DrawScope.drawMaskHandle(
+    rect: FitRect,
+    handle: MaskHandles.Handle,
+    radiusPx: Float,
+    strokeWidth: Float,
+) {
+    val point = MaskOverlayGeometry.toScreen(rect, handle.x, handle.y)
+    val center = Offset(point.x, point.y)
+    drawCircle(color = EditorPalette.bg.copy(alpha = 0.85f), radius = radiusPx + strokeWidth, center = center)
+    drawCircle(color = EditorPalette.textPrimary, radius = radiusPx, center = center)
+    drawCircle(color = EditorPalette.accent, radius = radiusPx, center = center, style = Stroke(width = strokeWidth))
+}
+
 // --------------------------------------------------------------- 調整パネル（ツールタブ）
 
-/** ツールタブ。実装済みは [BASIC] [CURVE] [HSL] [GEOMETRY] のみ（ADR-014 に基づく明示）。 */
+/** ツールタブ。全タブ実装済み（未実装時の明示経路は [ToolTab] に残す）。 */
 private enum class EditorToolTab(val labelRes: Int, val hintRes: Int?, val implemented: Boolean) {
     BASIC(EditorR.string.editor_tab_basic, null, true),
     CURVE(EditorR.string.editor_tab_curve, null, true),
     HSL(EditorR.string.editor_tab_hsl, null, true),
     GEOMETRY(EditorR.string.editor_tab_geometry, null, true),
     DETAIL(EditorR.string.editor_tab_detail, null, true),
-    LOCAL(EditorR.string.editor_tab_local, EditorR.string.editor_tab_hint_local, false),
+    /** 局部補正（マスク・PR-29c）。overlay 編集はプレビュー側の [MaskOverlay] が担う。 */
+    LOCAL(EditorR.string.editor_tab_local, null, true),
 }
 
 @Composable
@@ -411,6 +773,7 @@ private fun ToolPanel(
     onGeometryAngleReset: () -> Unit,
     onGeometryCropNudge: (Double, Double) -> Unit,
     onGeometryCropScale: (Double) -> Unit,
+    maskActions: EditorMaskActions,
     modifier: Modifier = Modifier,
 ) {
     var historyOpen by remember { mutableStateOf(false) }
@@ -460,10 +823,7 @@ private fun ToolPanel(
                 onCropScale = onGeometryCropScale,
             )
             EditorToolTab.DETAIL -> DetailContent(state, onSliderPreview, onSliderCommit)
-            EditorToolTab.LOCAL -> UnimplementedContent(
-                titleRes = EditorR.string.editor_local_title,
-                messageRes = EditorR.string.editor_local_notice,
-            )
+            EditorToolTab.LOCAL -> LocalContent(state, maskActions)
         }
         TextButton(
             onClick = {
@@ -1176,31 +1536,275 @@ private fun GeometryAngleDialog(
     )
 }
 
-// --------------------------------------------------------------- 未実装タブ表示
+// --------------------------------------------------------------- 局部補正タブ（マスク・PR-29c）
 
-/** タブ自体が未実装の場合の明示表示（ADR-014: 無通知の既定値反映を禁止）。 */
+/**
+ * 局部補正（マスク）パネル。overlay 編集（ハンドル/ブラシ）はプレビュー側の [MaskOverlay]。
+ *
+ * - 追加は 3 種（直線/円形/ブラシ）で上限 [MaskSpecs.MAX_MASKS]。追加・削除は
+ *   それぞれ 1 履歴イベント（VM が確定）。
+ * - 選択中マスクの feather、radial は角度、brush は半径（ツール設定）とストローク数を表示。
+ * - adjustments は 5 種（露出/コントラスト/彩度/温度/色合い）。表示値は -100..100 系・
+ *   温度は絶対 K で、レシピ値への変換は [MaskAdjustments]（VM 側で同じ換算）。
+ */
 @Composable
-private fun UnimplementedContent(@StringRes titleRes: Int, @StringRes messageRes: Int) {
-    Column(
+private fun LocalContent(
+    state: EditorViewModel.EditorState,
+    actions: EditorMaskActions,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
             .padding(top = 8.dp),
     ) {
         Text(
-            text = stringResource(titleRes),
+            text = stringResource(EditorR.string.editor_local_title),
             style = MaterialTheme.typography.titleSmall,
             color = EditorPalette.textPrimary,
+            modifier = Modifier.weight(1f),
         )
         Text(
-            text = stringResource(EditorR.string.editor_not_implemented),
-            style = MaterialTheme.typography.labelMedium,
-            color = EditorPalette.accent,
-            modifier = Modifier.padding(top = 2.dp),
-        )
-        Text(
-            text = stringResource(messageRes),
+            text = stringResource(EditorR.string.editor_mask_list_header, state.masks.size, MaskSpecs.MAX_MASKS),
             style = MaterialTheme.typography.labelSmall,
             color = EditorPalette.textSecondary,
+        )
+    }
+    Text(
+        text = stringResource(EditorR.string.editor_local_help),
+        style = MaterialTheme.typography.labelSmall,
+        color = EditorPalette.textSecondary,
+    )
+
+    val canAdd = state.masks.size < MaskSpecs.MAX_MASKS
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+    ) {
+        TextButton(onClick = { actions.onAdd(MaskSpecs.TYPE_LINEAR) }, enabled = canAdd) {
+            Text(
+                text = stringResource(EditorR.string.editor_mask_add_linear),
+                color = if (canAdd) EditorPalette.textPrimary else EditorPalette.textSecondary,
+            )
+        }
+        TextButton(onClick = { actions.onAdd(MaskSpecs.TYPE_RADIAL) }, enabled = canAdd) {
+            Text(
+                text = stringResource(EditorR.string.editor_mask_add_radial),
+                color = if (canAdd) EditorPalette.textPrimary else EditorPalette.textSecondary,
+            )
+        }
+        TextButton(onClick = { actions.onAdd(MaskSpecs.TYPE_BRUSH) }, enabled = canAdd) {
+            Text(
+                text = stringResource(EditorR.string.editor_mask_add_brush),
+                color = if (canAdd) EditorPalette.textPrimary else EditorPalette.textSecondary,
+            )
+        }
+    }
+    if (!canAdd) {
+        Text(
+            text = stringResource(EditorR.string.editor_mask_full, MaskSpecs.MAX_MASKS),
+            style = MaterialTheme.typography.labelSmall,
+            color = EditorPalette.accent,
+        )
+    }
+
+    if (state.masks.isEmpty()) {
+        Text(
+            text = stringResource(EditorR.string.editor_mask_empty),
+            style = MaterialTheme.typography.labelSmall,
+            color = EditorPalette.textSecondary,
+            modifier = Modifier.padding(top = 6.dp),
+        )
+        return
+    }
+
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 4.dp)
+            .horizontalScroll(rememberScrollState()),
+    ) {
+        state.masks.forEachIndexed { index, node ->
+            val selected = node.maskId == state.selectedMaskId
+            Text(
+                text = stringResource(EditorR.string.editor_mask_chip, maskTypeLabel(node.maskType), index + 1),
+                style = MaterialTheme.typography.labelSmall,
+                color = if (selected) EditorPalette.textPrimary else EditorPalette.textSecondary,
+                modifier = Modifier
+                    .background(if (selected) EditorPalette.panelRaised else EditorPalette.panel)
+                    .border(1.dp, EditorPalette.line)
+                    .clickable { actions.onSelect(node.maskId) }
+                    .padding(horizontal = 10.dp, vertical = 4.dp),
+            )
+        }
+    }
+
+    val selected = state.masks.firstOrNull { it.maskId == state.selectedMaskId }
+    if (selected == null) {
+        Text(
+            text = stringResource(EditorR.string.editor_mask_none_selected),
+            style = MaterialTheme.typography.labelSmall,
+            color = EditorPalette.textSecondary,
+            modifier = Modifier.padding(top = 6.dp),
+        )
+        return
+    }
+
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 6.dp),
+    ) {
+        Text(
+            text = stringResource(EditorR.string.editor_mask_selected, maskTypeLabel(selected.maskType)),
+            style = MaterialTheme.typography.bodySmall,
+            color = EditorPalette.textPrimary,
+            modifier = Modifier.weight(1f),
+        )
+        TextButton(onClick = { actions.onRemove(selected.maskId) }) {
+            Text(stringResource(EditorR.string.editor_mask_delete), color = EditorPalette.accent)
+        }
+    }
+
+    // ---- 形状パラメータ（feather / 角度 / ブラシ半径）----
+    val featherDefault = MaskSpecs.defaultParams(selected.maskType)?.get(MaskSpecs.KEY_FEATHER)
+        ?: MaskSpecs.MIN_FEATHER
+    val feather = MaskSlider.feather(
+        selected.parameters[MaskSpecs.KEY_FEATHER] ?: featherDefault,
+        featherDefault,
+    )
+    MaskSliderRow(
+        label = stringResource(EditorR.string.editor_mask_feather),
+        value = feather,
+        valueText = formatFixed(feather, 2),
+        range = MaskSpecs.MIN_FEATHER..MaskSpecs.MAX_FEATHER,
+        onPreview = { actions.onParamPreview(selected.maskId, MaskSpecs.KEY_FEATHER, it) },
+        onCommit = { actions.onParamCommit(selected.maskId, MaskSpecs.KEY_FEATHER, it) },
+    )
+    if (selected.maskType == MaskSpecs.TYPE_RADIAL) {
+        val angleDisplay = MaskSlider.angleDisplay(
+            selected.parameters[MaskSpecs.KEY_ANGLE_DEG] ?: MaskSpecs.DEFAULT_ANGLE_DEG,
+        )
+        MaskSliderRow(
+            label = stringResource(EditorR.string.editor_mask_angle),
+            value = angleDisplay,
+            valueText = stringResource(EditorR.string.editor_mask_degrees, formatFixed(angleDisplay, 1)),
+            range = -180.0..180.0,
+            onPreview = { actions.onParamPreview(selected.maskId, MaskSpecs.KEY_ANGLE_DEG, it) },
+            onCommit = { actions.onParamCommit(selected.maskId, MaskSpecs.KEY_ANGLE_DEG, it) },
+        )
+    }
+    if (selected.maskType == MaskSpecs.TYPE_BRUSH) {
+        MaskSliderRow(
+            label = stringResource(EditorR.string.editor_mask_brush_radius),
+            value = state.brushRadius,
+            valueText = formatFixed(state.brushRadius, 2),
+            range = MaskDraft.MIN_BRUSH_RADIUS..MaskSpecs.MAX_BRUSH_RADIUS,
+            onPreview = actions.onBrushRadius,
+            onCommit = actions.onBrushRadius,
+        )
+        Text(
+            text = stringResource(
+                EditorR.string.editor_mask_strokes,
+                selected.brushStrokes.size,
+                MaskSpecs.MAX_BRUSH_STROKES,
+            ),
+            style = MaterialTheme.typography.labelSmall,
+            color = EditorPalette.textSecondary,
+        )
+    }
+
+    // ---- adjustments（マスク内の補正のみ）----
+    Text(
+        text = stringResource(EditorR.string.editor_mask_adjust_header),
+        style = MaterialTheme.typography.bodySmall,
+        color = EditorPalette.textPrimary,
+        modifier = Modifier.padding(top = 8.dp),
+    )
+    MaskAdjustments.SPECS.forEach { spec ->
+        val recipeValue = selected.adjustments[spec.path]
+        val display = recipeValue?.let { MaskAdjustments.toDisplay(spec, it) } ?: spec.neutralDisplay
+        MaskSliderRow(
+            label = maskAdjustmentLabel(spec.path),
+            value = display,
+            valueText = if (recipeValue == null) {
+                stringResource(EditorR.string.editor_mask_value_unset)
+            } else {
+                MaskAdjustments.format(spec, display)
+            },
+            range = spec.displayMin..spec.displayMax,
+            onPreview = { actions.onAdjustPreview(selected.maskId, spec.path, it) },
+            onCommit = { actions.onAdjustCommit(selected.maskId, spec.path, it) },
+        )
+    }
+    TextButton(onClick = { actions.onResetAdjustments(selected.maskId) }) {
+        Text(stringResource(EditorR.string.editor_mask_reset), color = EditorPalette.accent)
+    }
+}
+
+/** マスク種別の表示ラベル（res 正本）。未知種別は生の型 ID（永続形式の安定 ID）を出す。 */
+@Composable
+private fun maskTypeLabel(maskType: String): String = when (maskType) {
+    MaskSpecs.TYPE_LINEAR -> stringResource(EditorR.string.editor_mask_type_linear)
+    MaskSpecs.TYPE_RADIAL -> stringResource(EditorR.string.editor_mask_type_radial)
+    MaskSpecs.TYPE_BRUSH -> stringResource(EditorR.string.editor_mask_type_brush)
+    else -> maskType
+}
+
+/** adjustments の表示ラベル。既存 `editor_adjust_*`（[AdjustmentLabels]）を可能な限り再利用する。 */
+@Composable
+private fun maskAdjustmentLabel(path: String): String {
+    if (path == MaskAdjustments.PATH_TEMPERATURE) {
+        return stringResource(EditorR.string.editor_mask_adjust_temperature)
+    }
+    val id = AdjustmentId.byPath(path)
+    val label = if (id != null) stringResource(AdjustmentLabels.labelRes(id)) else path
+    return if (id?.unit == AdjustmentId.Unit.EV) {
+        stringResource(EditorR.string.editor_slider_ev, label)
+    } else {
+        label
+    }
+}
+
+/** マスク用スライダー行（ラベル・表示値・範囲・preview/commit の 2 経路）。 */
+@Composable
+private fun MaskSliderRow(
+    label: String,
+    value: Double,
+    valueText: String,
+    range: ClosedFloatingPointRange<Double>,
+    onPreview: (Double) -> Unit,
+    onCommit: (Double) -> Unit,
+) {
+    val clamped = value.coerceIn(range.start, range.endInclusive)
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodySmall,
+                color = EditorPalette.textPrimary,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = valueText,
+                style = MaterialTheme.typography.bodySmall,
+                color = EditorPalette.textSecondary,
+            )
+        }
+        Slider(
+            value = clamped.toFloat(),
+            onValueChange = { f -> onPreview(f.toDouble()) },
+            onValueChangeFinished = { onCommit(clamped) },
+            valueRange = range.start.toFloat()..range.endInclusive.toFloat(),
+            colors = SliderDefaults.colors(
+                thumbColor = EditorPalette.accent,
+                activeTrackColor = EditorPalette.accent,
+                inactiveTrackColor = EditorPalette.line,
+            ),
         )
     }
 }

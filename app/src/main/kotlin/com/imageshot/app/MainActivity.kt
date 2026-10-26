@@ -6,12 +6,14 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.imageshot.core.model.ImageOpResult
+import com.imageshot.feature.editor.EditorMaskActions
 import com.imageshot.feature.editor.EditorScreen
 import com.imageshot.feature.editor.EditorViewModel
 import com.imageshot.feature.export.ExportScreen
@@ -74,6 +76,25 @@ class MainActivity : ComponentActivity() {
                             }
                         val editorState by vm.state().collectAsState()
                         val editorImages by vm.images().collectAsState()
+                        // PR-29c: 局部補正の配線（13 個のコールバックを 1 つの束にまとめる）。
+                        // VM のメソッド参照は安定なので vm 単位で remember する。
+                        val maskActions = remember(vm) {
+                            EditorMaskActions(
+                                onAdd = vm::onMaskAdd,
+                                onSelect = vm::onMaskSelect,
+                                onRemove = vm::onMaskRemove,
+                                onPreview = vm::onMaskPreview,
+                                onCommit = vm::onMaskCommit,
+                                onAdjustPreview = vm::onMaskAdjustPreview,
+                                onAdjustCommit = vm::onMaskAdjustCommit,
+                                onResetAdjustments = vm::onMaskResetAdjustments,
+                                onParamPreview = vm::onMaskParamPreview,
+                                onParamCommit = vm::onMaskParamCommit,
+                                onBrushAddPreview = vm::onMaskBrushAddPreview,
+                                onBrushAddCommit = vm::onMaskBrushAddCommit,
+                                onBrushRadius = vm::onMaskBrushRadius,
+                            )
+                        }
                         EditorScreen(
                             state = editorState,
                             images = editorImages,
@@ -91,6 +112,7 @@ class MainActivity : ComponentActivity() {
                             onGeometryAngleReset = vm::onGeometryAngleReset,
                             onGeometryCropNudge = vm::onGeometryCropNudge,
                             onGeometryCropScale = vm::onGeometryCropScale,
+                            maskActions = maskActions,
                             onUndo = vm::undo,
                             onRedo = vm::redo,
                             onBeforeChanged = vm::setBeforeVisible,

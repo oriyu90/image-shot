@@ -38,4 +38,8 @@ dependencies {
     api(libs.androidx.lifecycle.viewmodel.compose)
     api(libs.coil.compose)
     implementation(libs.kotlinx.coroutines.android)
+
+    // PR-29c: マスク編集の写像（fitRect/ハンドル）・間引き・既定値・表示スケール（純関数）の
+    // JVM 単体テスト。Robolectric は導入しない（feature:library の AvailabilitySweepTest と同方針）。
+    testImplementation(libs.junit)
 }

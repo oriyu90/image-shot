@@ -1,4 +1,4 @@
-# 09 Wave-3 残作業と以降の実装計画（2026-10-27 更新: PR-28b/28c・PR-30 完了／PR-29 は fixture ゲート待ち）
+# 09 Wave-3 残作業と以降の実装計画（2026-10-27 更新: PR-28b/28c・PR-29a/b/c・PR-30 完了／PR-24/25/26 は fixture 待ち）
 
 **位置づけ**: 正本の進捗は `06_未実装欠陥と実装計画.md` §3.2 と `benchmark/nfr_catalog.md`。手順詳細は `07_Wave3実装計画書.md`。本書は PR-28a（`1355191`）完了を受けた 2026-10-26 の全面更新版であり、2026-10-25 版の現状整理と調査分析を置き換える（Steps の番号割付・判断待ちの確定事項は引き継ぐ）。進捗が動く都度 06/07 を PR 単位で更新する。
 
@@ -20,6 +20,8 @@
 | `3023051` | **PR-28b（D4 自由角度/自由クロップ）+ PR-28c（D2 ディテール）**（実装連続のため 1 コミットに統合・golden 5→6 ケース化） |
 | `006d850` | PR-28c 12MP 超軽量経路テスト・06/09 同期 |
 | `bff70c1` | **PR-30（G2 availability・G3 inset・F3 adaptive）** |
+| `fe90992` | **PR-29a/29b（mask payload/JVM/Store/renderer・golden 8 ケース化）** |
+| （本 PR） | **PR-29c（マスク UI/overlay）** |
 
 ### 1.2 PR-28a（D1 per-channel curves）実施結果 — **commit `1355191`・2026-10-26**
 
@@ -72,6 +74,20 @@
 | Lead 修正 | 360dp パネルでタブ 6 個が折返し/画面外 → タブ行を横スクロール化。2 ペイン選択セルに枠線追加 |
 | 回帰 | `./gradlew test :feature:{editor,export,library}:lintDebug :app:assembleRelease` exit 0（unit 277・lint error 0）。`ui_strings_check` 違反 0（例外 29 行）。R8 release APK を debug 鍵で再署名して実機スモーク（ライブラリ 2 ペイン描画・FATAL 0・プロセス生存） |
 | 未検証 | 折りたたみ/マルチウィンドウ、数値入力ダイアログの IME、URI 失効の実機観察（原本削除は破壊的なため未実施・JVM/コードで担保）。ヒンジ領域 |
+
+### 1.8 PR-29（D3 マスク）実施結果 — 2026-10-27
+
+| 検証 | 結果 |
+|---|---|
+| JVM | MaskSpecs/MaskWeight/RecipeMaskApplier/Store の追加分を含め**320 件・失敗 0**（`331` は core:storage 48 件の glob 二重計数による誤り。XML 実測 320 を正とする） |
+| lint / build | 3 feature lint error 0・`:app:assembleDebug`/`:app:assembleRelease` 緑・`ui_strings_check` 違反 0（例外 29 行） |
+| golden ΔE 8/8 | 既存 6 ケース**ビット一致** + mask-linear `0.382577/1.143366` + mask-radial `0.173171/0.921418`（2,795,520px）< (1.00/2.00) |
+| 実機 UI | 直線追加 r51→露出 +1.94 r52（片側のみ明るく）→円形 r53（楕円+feather リング）→ブラシ r54+2 ストローク r55/r56（5/256）→undo/redo→削除 r59（2/8）→undo r60（3/8）。force-stop 復元（3/8） |
+| 永続化 | `local` payload v1（絶対 masks スナップショット・件数 1/1/2/3/3/3・maskId）を DB 実測。**kill 100/100 PASS**・58 revisions・再起動後 r58/3 masks・FATAL 0 |
+| 性能（参考） | debug ビルド・マスク露出スライダー 12 往復: **p95 48ms** / 318 frames / janky 93.7%。benchmark ビルド再測と 48MP 級は未測定 |
+
+- 未検証: ズーム/パン中ドラッグ（adb マルチタッチ制約）・256 ストローク負荷・48MP マスク合成。
+- masks は Room schema 変更なし（payload JSON のみ）。`EditEventKind.LOCAL` は IMPLEMENTED_M1。
 
 ### 1.3 実機・証跡の現状
 
@@ -161,7 +177,7 @@
 
 ### Step 4: fixture 到着後 — **PR-24（RAW spike → ADR-027）→ PR-25 → PR-26**（着手条件: SD 到着・計画内容は現状のまま）
 
-### Step 5: **PR-29（D3 マスク・29a/29b/29c）→ PR-30 → Wave-3 完了チェック**（PR-30 ✅ 2026-10-27／PR-29 は PR-26 完了が前提のため fixture 待ち）
+### Step 5: **PR-29（D3 マスク・29a/29b/29c）→ PR-30 → Wave-3 完了チェック**（**PR-29 ✅・PR-30 ✅ 2026-10-27**／残るは PR-24/25/26 の fixture 待ち）
 
 - 29 系は 07 §13（schema 変更なし・payload 追加フィールド）が最新正本（06 §4 ④ のドリフト回収を 29a 前に実施）
 - 30: G2 availability 更新・G3 insets・F3 adaptive（targetSdk 37 の 600dp 条件対応必須）— **✅ 完了 2026-10-27（§1.7）**

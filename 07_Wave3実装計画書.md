@@ -418,6 +418,93 @@ export 側は issueNotes に記録）。UI 警告の全面結線は ADR-014 の�
    `RecipeDevelopApplierTest`/`GainmapExportPolicyTest` の既存 2 テストを同期更新
    （マスクが画素へ作用するようになったため。KDoc が「適用集合の同時更新」を要求）。
 
+### 13.2 PR-29c 実施結果（✅ 2026-10-27・**実機検証済**）
+
+**実機検証（TB710FU/API36・2026-10-27・追記）**:
+- golden ΔE **8/8**（既存 6 ケースはビット一致を維持）: mask-linear `mean 0.382577 / p95 1.143366`、
+  mask-radial `mean 0.173171 / p95 0.921418`（2,795,520 px）< (1.00/2.00)。
+- UI: 直線追加（r51）→ 露出 +1.94（r52・右下側のみ明るくなることを目視）→ 円形追加（r53・楕円/feather リング）
+  → ブラシ追加（r54）+ 2 ストローク（r55/r56・5/256 点）→ undo×2/redo×2 → 削除（r59・2/8）→ undo（r60・3/8）。
+  force-stop 再起動で masks 3/8・チップ 3 種を復元。**kill 注入 100/100 PASS**・DB 58 revisions・
+  再起動後 r58/3 masks を復元・FATAL 0。
+- DB payload: `local` 行が絶対スナップショット v1（masks 件数 1/1/2/3/3/3・maskId 付き）であることを実測。
+- 性能（参考・**debug ビルド**・マスク露出スライダー 12 往復）: p95 **48ms** / p50 36ms / 318 frames・
+  janky 93.7%。100ms 基準内だが benchmark ビルドでの再測は未実施（未測定と明記）。
+- 未検証: ズーム/パン中のハンドル座標（adb のマルチタッチ制約で実機再現できず・コードは同一 graphicsLayer 方式）、
+  256 ストローク時の描画負荷、48MP 級マスク合成の時間/メモリ。
+
+
+**範囲**: `feature:editor`（VM/UI/文言/テスト）+ `app/MainActivity.kt` の配線 1 箇所のみ。
+`core:model`/`core:render`/`core:database` は **無変更**（29a/29b の public API をそのまま利用）。
+コミット・push は行っていない（作業ツリーのみ）。
+
+**VM（`EditorViewModel`）**:
+- `EditorState` に `masks: List<MaskNode>` / `selectedMaskId: String?` / `brushRadius: Double` を追加。
+  `masks` はレシピ（`EditRecipe.masks`）から復元し、ドラッグ中のみ in-memory の `transientMasks` を優先する
+  （undo/redo・force-stop 復元ではレシピ値に一致する）。選択 ID は UI セッション状態で、レシピに存在しない
+  ID は null へ落とす（undo でマスクが消えてもハンドルが残らない）。
+- 追加 API: `onMaskAdd` / `onMaskSelect` / `onMaskRemove` / `onMaskPreview` / `onMaskCommit` /
+  `onMaskAdjustPreview` / `onMaskAdjustCommit` / `onMaskResetAdjustments` / `onMaskParamPreview` /
+  `onMaskParamCommit` / `onMaskBrushAddPreview` / `onMaskBrushAddCommit` / `onMaskBrushRadius`。
+- 確定は `EditStore.commitMasks(documentId, committedRevision, masks, maskId)` の単一経路（楽観排他）。
+  実質無変化はイベントを作らない。失敗は既存 `commitToStore` と同じ FAILED 表示 + `resyncAfterFailure`。
+  追加・削除・スライダー確定・brush の 1 ジェスチャがそれぞれ 1 イベント。
+- 履歴: `EditEventKind.LOCAL` 行を「op: マスク N件」（`EditStoreHistoryItem.masks`）で要約。
+- 描画順は core 側で配線済み（geometry → develop → masks → detail）。UI はレシピを commit するだけ。
+
+**UI（`EditorScreen`）**:
+- 局部補正タブを実装済み化（hint・「未実装」表示を撤去）。パネルは マスク一覧 chips（最大 8）・追加 3 種・
+  選択マスクの削除・feather（0..1）・radial 角度（-180..180 表示・保存 [0,360)）・brush 半径（0.01..0.5）と
+  ストローク数・adjustments 5 種（露出 -5..5 / コントラスト・彩度・色合い -100..100 / 温度 2000..12000 K）・
+  「補正を0に戻す」。値表示は露出 2 桁・角度 1 桁・feather/半径 2 桁・他は整数。
+- overlay は 1 ペイン/2 ペイン共通の `PreviewPane` 内。**画像と同じ graphicsLayer（scale/offset）** を Canvas に
+  掛け、`ContentScale.Fit` の実表示矩形（`MaskOverlayGeometry.fitRect`）で正規化↔画面座標を写像する。
+  scale/offset は写像式に持ち込まず（レターボックスのみ考慮）、pointerInput を graphicsLayer の内側に置くため
+  ドラッグ座標も逆変換済みのローカル値になる → ズーム/パン中も座標が一致する。
+- 形状: linear=A/B ハンドル+境界線+feather 帯（境界に直交・幅=feather×|AB|）、radial=中心/rx/ry ハンドル+
+  楕円（angleDeg は画面で時計回り＝core の順写像）+feather リング、brush=半径間隔で間引いた点を半透明円で表示。
+  当たり判定は 48dp 相当・ハンドルは選択マスクのみ表示。ドラッグ中 `onMaskPreview`、離す/キャンセルで
+  `onMaskCommit`（1 操作 = 1 イベント）。
+
+**検証（この環境・2026-10-27）**:
+
+| 検証 | 結果 |
+|---|---|
+| `./gradlew test` | **320 件 / 失敗 0**（新規 `MaskEditingTest` **37 件**） |
+| lint（`:feature:editor` / `:feature:export` / `:feature:library` の `lintDebug`） | error 0 |
+| `:app:assembleDebug` | 緑（`MainActivity` の配線を含む） |
+| `tools/ui_strings_check.py` | 違反 0（台帳済み例外 29 行は不変） |
+| 実機/エミュレータ | **未使用**（overlay・2ペイン・ズーム・brush・undo/redo/force-stop は未検証） |
+| golden ΔE（8 ケース） | **未実行**（本 PR は描画ロジック無変更・ケース追加なし） |
+
+**未検証・残置（過大報告しない）**:
+- 実機確認は未実施。(a) 2ペイン（840dp+）と狭幅（ツールパネル最大 360dp）でのチップ/スライダーの収まり、
+  (b) ズーム 2x..8x 中のハンドル/ブラシの座標一致、(c) brush 選択中の 2 本指ピンチ（1 本指ドラッグが常に
+  描画を消費するため取りにくい）、(d) undo/redo/force-stop でのマスク復元、(e) ストローク 256 件での
+  overlay 描画負荷、(f) マスク合成の体感速度（NFR-04）は未測定。
+- マスク adjustments の未設定値はスライダーを中立位置（温度 6500 K）に置き、値表示を「—」にする
+  （未設定を適用済みと誤認させないため）。値を動かすと絶対 K / レシピ値として保存される。
+- 「0 に戻す」は adjustments を**全消去**する（0 値キーを残さない）。表示は「—」へ戻る。
+- タップのみでのブラシ点追加は未対応（ドラッグのみ）。1 本指ブラシ描画とピンチズームは同時成立しない。
+- マスクは crop 相対ではなく「geometry 適用後の画像全体」基準（core 契約どおり。クロップ後に貼る用途は非対応）。
+- **計数の不一致（重要な訂正）**: 本 PR の実測は `./gradlew test` = **320 件**
+  （内訳: core:model 20 / core:render 146 / core:storage 48 / core:database 40 / feature:editor 37 /
+  feature:export 21 / feature:library 8）。§13.1（および 06 の PR-30 行の 277）が記録した 331 とは
+  48 件差で、**差は core:storage のテスト件数 48 と一致**する（テスト結果 XML を `testDebugUnitTest` と
+  `test` の両パターンで拾うと storage だけ二重計数になる。実際この再計測でも同じ重複で 348 になった）。
+  既存テストの削除・改変はしていないため、**331 は計数ミスの可能性が高い**（断定はしない）。
+  本節は実測 320 を正とする。
+- `app/MainActivity.kt` への配線は「変更は feature:editor に限定」から 1 ファイルだけ逸脱した
+  （`EditorMaskActions` の生成と `maskActions` 引数）。VM の API を画面へ結線するために必須。
+
+**設計からの逸脱・追加判断（3 点）**:
+1. マスクの 13 コールバックは `EditorMaskActions` に束ねて渡す（`EditorScreen` の引数 36 個を避ける）。
+   VM 側の API 名・意味は仕様どおり。
+2. brush 半径は**マスク内容ではなくツール設定**として `EditorState.brushRadius` に持つ（新規ストロークにのみ適用）。
+   既存ストロークの半径を書き換える方式は「選択範囲の再編集」と履歴の意味が不透明になるため採らない。
+3. radial の角度は表示 -180..180 / 保存 [0,360) の正準化を VM で行う（core の
+   `EditNodeSpecs.canonicalAngleDeg` と同一規則。UI 側は `MaskSlider` で往復変換）。
+
 ## 14. PR-30: G2 availability・G3 inset・F3 adaptive
 
 - **既存計画継承**: 06 旧 PR-11/12/13 の再編成。

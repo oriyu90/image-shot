@@ -23,14 +23,37 @@
     <string name="editor_tab_geometry">ジオメトリ</string>
     <string name="editor_tab_detail">ディテール</string>
     <string name="editor_tab_local">局部補正</string>
-    <string name="editor_tab_hint_local">未実装（M3 予約）</string>
     <string name="editor_not_implemented">未実装</string>
     <string name="editor_detail_title">ディテール（シャープ/ノイズ低減）</string>
     <string name="editor_detail_notice">シャープは輪郭の局所コントラストを強調し、輝度ノイズ低減はざらつきを滑らかにします（色差は保持）。</string>
     <string name="editor_detail_help">0..100 の強度。適用順は「develop → ディテール → 書き出しリサイズ」でプレビューと書き出しが同一です。</string>
     <string name="editor_detail_degraded_notice">処理を軽くしたため自動降格しました（シャープのみ適用・輝度ノイズ低減は省略）</string>
     <string name="editor_local_title">局部補正（マスク）</string>
-    <string name="editor_local_notice">M3 予約。現在のビルドには含まれず、レシピにマスクがあっても適用されません（警告表示）。</string>
+
+    <!-- 局部補正（マスク・PR-29c） -->
+    <string name="editor_local_help">プレビュー上のハンドルをドラッグして範囲を決め、下のスライダーで選択範囲だけを補正します。適用順は「ジオメトリ → 基本補正 → マスク → ディテール」でプレビューと書き出しが同一です。</string>
+    <string name="editor_mask_list_header">マスク %1$d/%2$d</string>
+    <string name="editor_mask_add_linear">直線を追加</string>
+    <string name="editor_mask_add_radial">円形を追加</string>
+    <string name="editor_mask_add_brush">ブラシを追加</string>
+    <string name="editor_mask_full">マスクは %1$d 件までです（不要なマスクを削除してください）</string>
+    <string name="editor_mask_empty">まだマスクがありません。上のボタンで追加してください。</string>
+    <string name="editor_mask_chip">%1$s %2$d</string>
+    <string name="editor_mask_none_selected">マスクを選択すると、プレビューにハンドルが出ます。</string>
+    <string name="editor_mask_selected">選択中: %1$s</string>
+    <string name="editor_mask_type_linear">直線</string>
+    <string name="editor_mask_type_radial">円形</string>
+    <string name="editor_mask_type_brush">ブラシ</string>
+    <string name="editor_mask_delete">このマスクを削除</string>
+    <string name="editor_mask_feather">境界のぼかし</string>
+    <string name="editor_mask_angle">角度</string>
+    <string name="editor_mask_degrees">%1$s°</string>
+    <string name="editor_mask_brush_radius">ブラシ半径（次のストローク）</string>
+    <string name="editor_mask_strokes">ストローク %1$d/%2$d</string>
+    <string name="editor_mask_adjust_header">マスク内の補正（選択範囲のみ）</string>
+    <string name="editor_mask_adjust_temperature">温度（K）</string>
+    <string name="editor_mask_value_unset">—</string>
+    <string name="editor_mask_reset">補正を0に戻す</string>
 
     <!-- 履歴 -->
     <string name="editor_history_open">履歴を閉じる（%1$d件）</string>
@@ -107,6 +130,7 @@
     <string name="editor_history_flip_v">垂直反転</string>
     <string name="editor_history_crop">クロップ</string>
     <string name="editor_history_rotation">回転%1$s°</string>
+    <string name="editor_history_mask">%1$s: マスク %2$d件</string>
 
     <!-- スライダー表示ラベル（AdjustmentId の正本写像・feature:editor res）。 -->
     <string name="editor_adjust_exposure">露出</string>
