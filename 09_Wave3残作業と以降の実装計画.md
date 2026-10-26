@@ -21,7 +21,7 @@
 | `006d850` | PR-28c 12MP 超軽量経路テスト・06/09 同期 |
 | `bff70c1` | **PR-30（G2 availability・G3 inset・F3 adaptive）** |
 | `fe90992` | **PR-29a/29b（mask payload/JVM/Store/renderer・golden 8 ケース化）** |
-| （本 PR） | **PR-29c（マスク UI/overlay）** |
+| `e7c7231` | **PR-29c（マスク UI/overlay）** |
 
 ### 1.2 PR-28a（D1 per-channel curves）実施結果 — **commit `1355191`・2026-10-26**
 
@@ -85,6 +85,7 @@
 | 実機 UI | 直線追加 r51→露出 +1.94 r52（片側のみ明るく）→円形 r53（楕円+feather リング）→ブラシ r54+2 ストローク r55/r56（5/256）→undo/redo→削除 r59（2/8）→undo r60（3/8）。force-stop 復元（3/8） |
 | 永続化 | `local` payload v1（絶対 masks スナップショット・件数 1/1/2/3/3/3・maskId）を DB 実測。**kill 100/100 PASS**・58 revisions・再起動後 r58/3 masks・FATAL 0 |
 | 性能（参考） | debug ビルド・マスク露出スライダー 12 往復: **p95 48ms** / 318 frames / janky 93.7%。benchmark ビルド再測と 48MP 級は未測定 |
+| R8 release | release APK を debug 鍵で再署名して実機スモーク: local タブ・3 masks 復元・描画・FATAL 0（プロセス生存） |
 
 - 未検証: ズーム/パン中ドラッグ（adb マルチタッチ制約）・256 ストローク負荷・48MP マスク合成。
 - masks は Room schema 変更なし（payload JSON のみ）。`EditEventKind.LOCAL` は IMPLEMENTED_M1。
