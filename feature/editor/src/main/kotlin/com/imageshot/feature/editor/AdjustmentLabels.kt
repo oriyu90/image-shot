@@ -51,5 +51,7 @@ internal object AdjustmentLabels {
         AdjustmentId.HSL_MAGENTA_HUE -> R.string.editor_adjust_hsl_magenta_hue
         AdjustmentId.HSL_MAGENTA_SAT -> R.string.editor_adjust_hsl_magenta_sat
         AdjustmentId.HSL_MAGENTA_LUM -> R.string.editor_adjust_hsl_magenta_lum
+        AdjustmentId.DETAIL_SHARPEN -> R.string.editor_adjust_detail_sharpen
+        AdjustmentId.DETAIL_LUMA_NOISE -> R.string.editor_adjust_detail_luma_noise
     }
 }

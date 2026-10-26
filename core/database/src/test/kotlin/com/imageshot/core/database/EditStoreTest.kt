@@ -730,15 +730,75 @@ class EditStoreTest {
     }
 
     @Test
-    fun commitGeometry_freeAngle_isRejected_noEventAppended() {
+    fun commitGeometry_freeAngle_isAcceptedCanonicalizedAndUndoable() {
+        // PR-28b: 90°刻み限定を解除。任意角は [0,360) へ正準化して保存し、
+        // payload 形状（angleDeg/mirrorX/mirrorY/crop）は v1 のまま（後方互換）。
+        val backend = FakeBackend()
+        val store = store(backend)
+        var state = bootstrap(store)
+
+        state = commitGeometry(store, state, EditRecipe.GeometryParams(angleDeg = 3.5))
+        assertEquals(3.5, state.recipe.geometry.angleDeg, 0.0)
+        assertEquals(EditEventKind.GEOMETRY.id, backend.revisions.single().eventType)
+        val payload = kotlinx.serialization.json.Json.parseToJsonElement(backend.revisions.single().payloadJson)
+            as kotlinx.serialization.json.JsonObject
+        val geo = payload["geometry"] as kotlinx.serialization.json.JsonObject
+        assertEquals(3.5, (geo["angleDeg"] as JsonPrimitive).doubleOrNull!!, 0.0)
+
+        // -90° は 270° として保存（同じ回転の正準表現）。
+        state = commitGeometry(store, state, EditRecipe.GeometryParams(angleDeg = -90.0))
+        assertEquals(270.0, state.recipe.geometry.angleDeg, 0.0)
+
+        // 360° は 0°（中立）。
+        state = commitGeometry(store, state, EditRecipe.GeometryParams(angleDeg = 360.0))
+        assertEquals(0.0, state.recipe.geometry.angleDeg, 0.0)
+
+        // undo/redo は絶対状態スナップショット（任意角でも同じ契約）。
+        val afterUndo = applied(runBlocking { store.undo(state.documentId) })
+        assertEquals(270.0, afterUndo.recipe.geometry.angleDeg, 0.0)
+        val afterRedo = applied(runBlocking { store.redo(afterUndo.documentId) })
+        assertEquals(0.0, afterRedo.recipe.geometry.angleDeg, 0.0)
+
+        // 再読込（DB 再構築経路）でも任意角が保たれる。
+        val reloaded = assertIs<ImageOpResult.Success<EditStore.EditStoreState>>(
+            runBlocking { store.load(state.documentId) },
+        ).value
+        assertEquals(0.0, reloaded.recipe.geometry.angleDeg, 0.0)
+    }
+
+    @Test
+    fun commitGeometry_nonFiniteAngle_isRejected_noEventAppended() {
         val backend = FakeBackend()
         val store = store(backend)
         val base = bootstrap(store)
         val failure = runBlocking {
-            store.commitGeometry(base.documentId, base.currentRevision, EditRecipe.GeometryParams(angleDeg = 3.5))
+            store.commitGeometry(base.documentId, base.currentRevision, EditRecipe.GeometryParams(angleDeg = Double.NaN))
         }
         assertIs<ImageOpResult.Failure>(failure)
         assertEquals(0, backend.revisions.size)
+    }
+
+    @Test
+    fun detailSliders_viaStandardCommit_applyNormalizeAndUndo() {
+        // PR-28c: detail はスライダー共通 payload（path/value/op）。0..100 → 0..1 正規化。
+        val store = store()
+        var state = bootstrap(store)
+        state = commit(store, state, AdjustmentId.DETAIL_SHARPEN, 60.0)
+        state = commit(store, state, AdjustmentId.DETAIL_LUMA_NOISE, 25.0)
+        assertEquals(0.6, state.recipe.develop.detail.sharpen, 1e-9)
+        assertEquals(0.25, state.recipe.develop.detail.lumaNoise, 1e-9)
+        assertEquals(60.0, AdjustmentId.DETAIL_SHARPEN.sliderValueOf(state.recipe), 1e-9)
+        assertEquals(25.0, AdjustmentId.DETAIL_LUMA_NOISE.sliderValueOf(state.recipe), 1e-9)
+
+        val afterUndo = applied(runBlocking { store.undo(state.documentId) })
+        assertEquals(0.6, afterUndo.recipe.develop.detail.sharpen, 1e-9)
+        assertEquals(0.0, afterUndo.recipe.develop.detail.lumaNoise, 1e-9)
+
+        // 再読込でも同じ値（payload 再生）。
+        val reloaded = assertIs<ImageOpResult.Success<EditStore.EditStoreState>>(
+            runBlocking { store.load(state.documentId) },
+        ).value
+        assertEquals(0.6, reloaded.recipe.develop.detail.sharpen, 1e-9)
     }
 
     @Test

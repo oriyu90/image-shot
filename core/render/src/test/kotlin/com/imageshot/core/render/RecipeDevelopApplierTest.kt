@@ -4,6 +4,7 @@ import com.imageshot.core.model.EditNodeSpecs
 import com.imageshot.core.model.EditRecipe
 import kotlin.math.abs
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -167,15 +168,16 @@ class RecipeDevelopApplierTest {
     }
 
     @Test
-    fun unappliedNodeWarnings_geometryAndMask_warnsListingEach() {
+    fun unappliedNodeWarnings_freeAngleApplied_masksOnlyWarns() {
+        // PR-28b: 自由角度は適用済み（警告対象外）。マスクのみ未適用として警告される。
         val recipe = defaultRecipe().copy(
             geometry = EditRecipe.GeometryParams(angleDeg = 3.5),
             masks = listOf(EditRecipe.MaskNode(maskId = "m1", maskType = "linear")),
         )
         val warnings = RecipeDevelopApplier.unappliedNodeWarnings(recipe)
-        assertTrue(warnings.any { it.contains("geometry") })
+        assertFalse(warnings.any { it.contains("geometry") })
         assertTrue(warnings.any { it.contains("mask") })
-        assertEquals(2, warnings.size)
+        assertEquals(1, warnings.size)
     }
 
     @Test
@@ -195,11 +197,17 @@ class RecipeDevelopApplierTest {
         )
         assertTrue(RecipeDevelopApplier.unappliedNodeWarnings(foreign).any { it.contains("HSL") })
 
-        // ディテールは未実装 → 警告（そのまま）。
-        val detail = defaultDevelop().copy(detail = EditRecipe.Detail(sharpen = 0.5))
-        val warnings = RecipeDevelopApplier.unappliedNodeWarnings(
-            defaultRecipe().copy(develop = detail),
+        // PR-28c: sharpen/lumaNoise は適用済み → 警告しない。chromaNR のみ未適用として警告。
+        val detailApplied = defaultDevelop().copy(detail = EditRecipe.Detail(sharpen = 0.5, lumaNoise = 0.3))
+        assertTrue(
+            RecipeDevelopApplier.unappliedNodeWarnings(
+                defaultRecipe().copy(develop = detailApplied),
+            ).isEmpty(),
         )
-        assertTrue(warnings.any { it.contains("detail") })
+        val chromaOnly = defaultDevelop().copy(detail = EditRecipe.Detail(chromaNoise = 0.4))
+        val warnings = RecipeDevelopApplier.unappliedNodeWarnings(
+            defaultRecipe().copy(develop = chromaOnly),
+        )
+        assertTrue(warnings.any { it.contains("chroma") })
     }
 }

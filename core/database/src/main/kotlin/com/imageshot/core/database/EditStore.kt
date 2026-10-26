@@ -262,7 +262,7 @@ class EditStore(
         val normalized = EditNodeSpecs.normalizeGeometry(geometry)
             ?: return ImageOpResult.Failure(
                 ErrorCode.MALFORMED_METADATA,
-                "invalid geometry params (angle must be 0/90/180/270; crop span > 0)",
+                "invalid geometry params (angle must be finite; crop span > 0)",
             )
         val payload = buildJsonObject {
             put("op", op)

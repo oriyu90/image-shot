@@ -31,7 +31,7 @@ import kotlinx.coroutines.withContext
  * - ディテール/局所マスクは未適用。無通知に捨てないため、結果 warnings に降格警告を
  *   保つ（ADR-014）。
  * - P4 で追加されたノード: master カーブ / HSL 8系統 / ジオメトリ（90°回転・反転・
- *   プリセット・クロップ）。R/G/B チャンネルカーブ・自由角度・光学補正は未適用。
+ *   プリセット・クロップ・自由角度）。R/G/B チャンネルカーブは適用済み・光学補正は未適用。
  * - 巨大Bitmapの多重保持を避ける: 結果は RenderBitmapStore（文書ごと直近3世代）に置き、
  *   入力ソースは即 recycle、並列生成は1に制限（§4.3）。
  * - 処理は常にワーカースレッド（Dispatchers.Default / IO）。UI スレッドで実行しない。
@@ -91,7 +91,8 @@ class SimpleBitmapPhotoRenderer(
                 )
             val source = decoded.bitmap
 
-            val output = applyDevelop(source, recipe, decoded.sourceOrientation)
+            val developed = applyDevelop(source, recipe, decoded.sourceOrientation)
+            val output = developed.bitmap
             source.recycle()
 
             val bitmapKey = RenderBitmapStore.keyFor(request.documentId, request.generationId)
@@ -108,7 +109,9 @@ class SimpleBitmapPhotoRenderer(
                 histogram = emptyList(),
                 revision = request.revision,
                 generationId = request.generationId,
-                warnings = renderWarnings(decoded),
+                warnings = renderWarnings(decoded).let { base ->
+                    if (developed.detailDegraded) base + RecipeDetailApplier.DEGRADED_WARNING else base
+                },
             )
             latest[request.documentId] = result
             ImageOpResult.Success(result)
@@ -169,11 +172,14 @@ class SimpleBitmapPhotoRenderer(
      * 書き出し（ExportBitmapRenderer）と同一ノード実装へ委譲する:
      *   SourceOrientation.normalize（EXIF 1..8 正規化・ユーザージオメトリの前に適用）
      *   → RecipeGeometry.apply（回転→反転→クロップ、純Kotlin ピクセル再索引）
-     *   → RecipeDevelopApplier.applyToPixels（RecipeToneCurve/RecipeCurve/RecipeHsl 正本）。
+     *   → RecipeDevelopApplier.applyToPixels（RecipeToneCurve/RecipeCurve/RecipeHsl 正本）
+     *   → RecipeDetailApplier.applyToPixels（PR-28c: 空間 stage・自動降格時は警告）。
      * 未実装ノードの有効値が入り込んでも無通知適用はしない（ADR-014、warnings 由来）。
-     * ディテール/光学補正/局所マスクはこの段階では読まない。
+     * 光学補正/局所マスクはこの段階では読まない（自由角度は PR-28b、ディテールは PR-28c で適用）。
      */
-    private fun applyDevelop(source: Bitmap, recipe: EditRecipe, sourceOrientation: Int): Bitmap {
+    private data class DevelopOutcome(val bitmap: Bitmap, val detailDegraded: Boolean)
+
+    private fun applyDevelop(source: Bitmap, recipe: EditRecipe, sourceOrientation: Int): DevelopOutcome {
         val width = source.width
         val height = source.height
         var pixels = IntArray(width * height)
@@ -200,12 +206,14 @@ class SimpleBitmapPhotoRenderer(
         )
         pixels = plane.pixels
         RecipeDevelopApplier.applyToPixels(pixels, recipe.develop)
+        // PR-28c: 空間 stage（develop 後・Bitmap 生成前）。preview/export で同一関数。
+        val detail = RecipeDetailApplier.applyToPixels(pixels, plane.width, plane.height, recipe.develop.detail)
 
         val outW = plane.width
         val outH = plane.height
         val out = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888)
         out.setPixels(pixels, 0, outW, 0, 0, outW, outH)
-        return out
+        return DevelopOutcome(out, detail.degraded)
     }
 
     companion object {
@@ -217,7 +225,8 @@ class SimpleBitmapPhotoRenderer(
          */
         val RENDER_WARNINGS = arrayOf(
             "8bit-sRGB CPU fallback pipeline (ADR-005 float/tile pipeline not implemented)",
-            "unimplemented nodes ignored: detail, vignette, local masks (curve/HSL/geometry are applied)",
+            "unimplemented nodes ignored: vignette, local masks, chroma noise reduction " +
+                "(curve/HSL/geometry incl. free-angle/detail sharpen+lumaNR are applied)",
             "tone/curve/HSL node formulas are design-stage; visual quality unverified (no golden tests)",
         )
 

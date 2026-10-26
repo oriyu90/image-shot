@@ -1,6 +1,7 @@
 package com.imageshot.core.render
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -114,9 +115,113 @@ class RecipeGeometryTest {
         assertEquals(1, RecipeGeometry.quarterTurns(90.0))
         assertEquals(2, RecipeGeometry.quarterTurns(180.0))
         assertEquals(3, RecipeGeometry.quarterTurns(270.0))
-        // 未対応角度（自由角度・負の折返し）は恒等に落とす（正規化は EditStore 側・警告側で通知）。
-        assertEquals(0, RecipeGeometry.quarterTurns(-90.0))
+        // PR-28b: 負角・360°超は mod 360 で同じ回転へ畳み込む。
+        assertEquals(3, RecipeGeometry.quarterTurns(-90.0))
+        assertEquals(0, RecipeGeometry.quarterTurns(360.0))
+        assertEquals(1, RecipeGeometry.quarterTurns(450.0))
+        // 90°刻みでない角度は任意角経路（quarter=0 の「回転なし」ではない）。
         assertEquals(0, RecipeGeometry.quarterTurns(12.5))
+    }
+
+    // ---- 任意角回転（PR-28b・黒縁付き外接矩形+バイリニア逆写像）----
+
+    /** 4×2 平面（w=4, h=2）。ARGB 個別値（固定値 golden 用）。 */
+    private fun plane42(): RecipeGeometry.PixPlane {
+        val pixels = intArrayOf(
+            0xFFFF0000.toInt(), 0xFF00FF00.toInt(), 0xFF0000FF.toInt(), 0xFFFFFFFF.toInt(),
+            0xFF000000.toInt(), 0xFF808080.toInt(), 0xFF804020.toInt(), 0xFF204080.toInt(),
+        )
+        return RecipeGeometry.PixPlane(pixels, 4, 2)
+    }
+
+    @Test
+    fun outputSize_matchesRotatedBoundingBox() {
+        assertEquals(4 to 2, RecipeGeometry.outputSize(4, 2, 0.0))
+        assertEquals(2 to 4, RecipeGeometry.outputSize(4, 2, 90.0))
+        assertEquals(4 to 2, RecipeGeometry.outputSize(4, 2, 180.0))
+        assertEquals(2 to 4, RecipeGeometry.outputSize(4, 2, 270.0))
+        // 30°: ceil(4·√3/2 + 2·1/2)=ceil(4.464)=5 / ceil(4·1/2 + 2·√3/2)=ceil(3.732)=4
+        assertEquals(5 to 4, RecipeGeometry.outputSize(4, 2, 30.0))
+        // 360° は 0° と同じ。
+        assertEquals(4 to 2, RecipeGeometry.outputSize(4, 2, 360.0))
+    }
+
+    @Test
+    fun rotateArbitrary_30deg_matchesFixedGoldenPixels() {
+        // 実装から生成した固定値（4×2 を 30°CW・外接矩形 5×4・被覆外は不透明黒）。
+        // 検算: 行0/行3 は全黒、内容は右下がり（CW 回転）に並ぶ。
+        val out = RecipeGeometry.rotateArbitrary(plane42(), 30.0)
+        assertEquals(5, out.width)
+        assertEquals(4, out.height)
+        val expected = intArrayOf(
+            0xFF000000.toInt(), 0xFF000000.toInt(), 0xFF000000.toInt(), 0xFF000000.toInt(), 0xFF000000.toInt(),
+            0xFF000000.toInt(), 0xFF60461C.toInt(), 0xFF09BA42.toInt(), 0xFF000000.toInt(), 0xFF000000.toInt(),
+            0xFF000000.toInt(), 0xFF000000.toInt(), 0xFF774F41.toInt(), 0xFF7775B8.toInt(), 0xFF000000.toInt(),
+            0xFF000000.toInt(), 0xFF000000.toInt(), 0xFF000000.toInt(), 0xFF000000.toInt(), 0xFF000000.toInt(),
+        )
+        org.junit.Assert.assertArrayEquals(expected, out.pixels)
+    }
+
+    @Test
+    fun rotateArbitrary_isPeriodicModulo360() {
+        val base = RecipeGeometry.rotateArbitrary(plane42(), 30.0)
+        for (angle in listOf(390.0, -330.0, 750.0, -690.0)) {
+            val out = RecipeGeometry.rotateArbitrary(plane42(), angle)
+            assertEquals("angle=$angle", base.width, out.width)
+            assertEquals("angle=$angle", base.height, out.height)
+            org.junit.Assert.assertArrayEquals("angle=$angle", base.pixels, out.pixels)
+        }
+    }
+
+    @Test
+    fun rotateArbitrary_quarterAnglesUseExactNoResamplePath() {
+        val out = RecipeGeometry.rotateArbitrary(plane42(), 90.0)
+        val exact = RecipeGeometry.rotateCw90(plane42(), 1)
+        assertEquals(2, out.width)
+        assertEquals(4, out.height)
+        org.junit.Assert.assertArrayEquals(exact.pixels, out.pixels)
+        // 画素値が入力のまま（補間されていない）ことも確認する。
+        for (v in out.pixels) {
+            assertTrue("unexpected interpolated value: ${v.toUInt().toString(16)}", v in plane42().pixels.toList())
+        }
+    }
+
+    @Test
+    fun rotateArbitrary_fillsUncoveredCornersWithOpaqueBlack() {
+        val out = RecipeGeometry.rotateArbitrary(plane42(), 30.0)
+        assertEquals(RecipeGeometry.EDGE_FILL_ARGB, out.pixels[0])
+        assertEquals(RecipeGeometry.EDGE_FILL_ARGB, out.pixels[out.width - 1])
+        assertEquals(RecipeGeometry.EDGE_FILL_ARGB, out.pixels[out.pixels.size - 1])
+    }
+
+    @Test
+    fun apply_arbitraryRotationThenFlipThenCrop_inDocumentedOrder() {
+        // 回転（5×4）→ 左右反転 → 正規化 crop [0.4,0.25,0.6,0.75]
+        //   left=round(2.0)=2, right=round(3.0)=3, top=round(1.0)=1, bottom=round(3.0)=3 → 1×2。
+        // 手順の正本（回転→反転→クロップ）を、公開関数の合成結果と照合する。
+        val rotated = RecipeGeometry.rotateArbitrary(plane42(), 30.0)
+        val flipped = RecipeGeometry.flipHorizontal(rotated)
+        val out = RecipeGeometry.apply(
+            plane42(),
+            angleDeg = 30.0,
+            mirrorX = true,
+            mirrorY = false,
+            cropNorm = listOf(0.4, 0.25, 0.6, 0.75),
+        )
+        assertEquals(1, out.width)
+        assertEquals(2, out.height)
+        assertEquals(flipped.pixels[1 * 5 + 2], out.pixels[0])
+        assertEquals(flipped.pixels[2 * 5 + 2], out.pixels[1])
+    }
+
+    @Test
+    fun applyIfNeeded_freeAngleProducesNewPlane_fullTurnIsIdentity() {
+        val src = plane42()
+        val rotated = RecipeGeometry.applyIfNeeded(src, 12.5, false, false, listOf(0.0, 0.0, 1.0, 1.0))
+        assertTrue(rotated !== src)
+
+        val identity = RecipeGeometry.applyIfNeeded(src, 360.0, false, false, listOf(0.0, 0.0, 1.0, 1.0))
+        assertTrue(identity === src)
     }
 
     // ---- 正準写像としての develop 順との合成可換性（点操作 develop は座標非依存）----

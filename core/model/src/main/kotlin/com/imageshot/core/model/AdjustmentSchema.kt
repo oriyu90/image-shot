@@ -67,6 +67,9 @@ enum class AdjustmentId(
     HSL_MAGENTA_HUE("develop.color.hsl.magenta.hue", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
     HSL_MAGENTA_SAT("develop.color.hsl.magenta.sat", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
     HSL_MAGENTA_LUM("develop.color.hsl.magenta.lum", -100.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.HSL),
+    // ---- ディテール（PR-28c）: 0..100 の強度。レシピは 0..1 に正規化して保存する。 ----
+    DETAIL_SHARPEN("develop.detail.sharpen", 0.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.DETAIL),
+    DETAIL_LUMA_NOISE("develop.detail.lumaNoise", 0.0, 100.0, 0.0, 1.0, Unit.POINT, EditEventKind.DETAIL),
     ;
 
     enum class Unit(val display: String) {
@@ -116,6 +119,12 @@ enum class AdjustmentId(
                     whiteBalance = recipe.develop.whiteBalance.copy(tint = value / 100.0),
                 ),
             )
+            DETAIL_SHARPEN -> recipe.copy(
+                develop = recipe.develop.copy(detail = recipe.develop.detail.copy(sharpen = value / 100.0)),
+            )
+            DETAIL_LUMA_NOISE -> recipe.copy(
+                develop = recipe.develop.copy(detail = recipe.develop.detail.copy(lumaNoise = value / 100.0)),
+            )
             else -> {
                 // HSL 8系統（kind = HSL）: 正規化済み key のみ受理（EditNodeSpecs が正本）。
                 val key = recipePath.removePrefix(HSL_PATH_PREFIX)
@@ -141,6 +150,8 @@ enum class AdjustmentId(
         SATURATION -> (sanitize(recipe.develop.color.saturation) * 100.0).coerceIn(min, max)
         TEMPERATURE -> sliderFromKelvin(recipe.develop.whiteBalance.tempKelvin)
         TINT -> (sanitize(recipe.develop.whiteBalance.tint) * 100.0).coerceIn(min, max)
+        DETAIL_SHARPEN -> (sanitize(recipe.develop.detail.sharpen) * 100.0).coerceIn(min, max)
+        DETAIL_LUMA_NOISE -> (sanitize(recipe.develop.detail.lumaNoise) * 100.0).coerceIn(min, max)
         else -> {
             val mapValue = recipe.develop.color.hsl[recipePath.removePrefix(HSL_PATH_PREFIX)]
             (sanitize(mapValue ?: 0.0) * 100.0).coerceIn(min, max)

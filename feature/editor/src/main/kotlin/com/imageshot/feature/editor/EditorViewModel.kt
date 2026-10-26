@@ -18,6 +18,7 @@ import com.imageshot.core.model.RecipeParameterEdit
 import com.imageshot.core.model.RenderRequest
 import com.imageshot.core.model.RenderResult
 import com.imageshot.core.render.PhotoRenderer
+import com.imageshot.core.render.RecipeGeometry
 import com.imageshot.core.render.RenderBitmapStore
 import com.imageshot.feature.editor.R as EditorR
 import kotlinx.coroutines.Job
@@ -28,6 +29,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 /**
  * 編集 ViewModel（02_実装定義書.md §10 画面状態管理 / §3.3 保存規則）。
@@ -335,14 +337,36 @@ class EditorViewModel(
         selectedCurveChannel.value = channel
     }
 
-    /** ジオメトリ: 90°単位の回転（+1 = 時計回り, -1 = 反時計回り）。 */
+    /**
+     * ジオメトリ: 90°単位の回転（+1 = 時計回り, -1 = 反時計回り）。
+     * 自由角度（PR-28b）導入後もボタンは「現在角 + ±90°」の加算として作用する
+     * （微調整成分は保持したまま 90°回転する。例 12.5° + 90° = 102.5°）。
+     */
     fun onGeometryRotate(deltaQuarters: Int) {
-        // deltaQuarters は ±1 を想定。 quarter を mod 4 で畳み込む（正規化済み角度）。
         val current = recipe.value?.geometry ?: EditRecipe.GeometryParams()
-        val quarters = (current.angleDeg / 90.0).toInt() // 0..3（正規化済み）
-        val next = ((quarters + deltaQuarters) % 4 + 4) % 4
-        val nextGeometry = current.copy(angleDeg = next * 90.0)
-        commitGeometryNormalized(nextGeometry)
+        val canonical = EditNodeSpecs.canonicalAngleDeg(current.angleDeg) ?: 0.0
+        val next = EditNodeSpecs.canonicalAngleDeg(canonical + deltaQuarters * 90.0) ?: return
+        commitGeometryNormalized(current.copy(angleDeg = next))
+    }
+
+    /**
+     * ジオメトリ: 角度の微調整（PR-28b・-45..45）。UI スライダー/数値入力の確定値を受ける。
+     * 90°刻み基準（現在角 − 微調整成分）を固定し、微調整だけを差し替えることで
+     * スライダーの連続操作で基準が跳ねない（保存は正準域 [0,360) の全角）。
+     */
+    fun onGeometryFineAngle(fineDeg: Double) {
+        if (!fineDeg.isFinite()) return
+        val current = recipe.value?.geometry ?: EditRecipe.GeometryParams()
+        val canonical = EditNodeSpecs.canonicalAngleDeg(current.angleDeg) ?: 0.0
+        val base = canonical - EditNodeSpecs.fineAngleDeg(canonical)
+        val next = EditNodeSpecs.canonicalAngleDeg(base + fineDeg.coerceIn(-45.0, 45.0)) ?: return
+        commitGeometryNormalized(current.copy(angleDeg = next))
+    }
+
+    /** ジオメトリ: 回転角を 0° へ戻す（反転・クロップは保持）。 */
+    fun onGeometryAngleReset() {
+        val current = recipe.value?.geometry ?: EditRecipe.GeometryParams()
+        commitGeometryNormalized(current.copy(angleDeg = 0.0))
     }
 
     /** ジオメトリ: 反転トグル（mirrorX = 水平, mirrorY = 垂直）。 */
@@ -356,9 +380,10 @@ class EditorViewModel(
     fun onGeometryCrop(aspect: Double?) {
         val asset = assetFlow.value ?: return
         val current = recipe.value?.geometry ?: EditRecipe.GeometryParams()
-        val quarters = (current.angleDeg / 90.0).toInt() % 2 == 1 // 90/270 は幅高さ入れ替え
-        val canvasW = if (quarters) asset.height.toDouble() else asset.width.toDouble()
-        val canvasH = if (quarters) asset.width.toDouble() else asset.height.toDouble()
+        // 回転後キャンバス寸法（任意角は外接矩形・90°刻みは寸法入替）を単一正本から取得する。
+        val (canvasWpx, canvasHpx) = RecipeGeometry.outputSize(asset.width, asset.height, current.angleDeg)
+        val canvasW = canvasWpx.toDouble()
+        val canvasH = canvasHpx.toDouble()
         val cropNorm = if (aspect == null) {
             EditRecipe.GeometryParams().cropNorm
         } else {
@@ -374,6 +399,39 @@ class EditorViewModel(
     fun onGeometryResetCrop() {
         val current = recipe.value?.geometry ?: EditRecipe.GeometryParams()
         commitGeometryNormalized(current.copy(cropNorm = EditRecipe.GeometryParams().cropNorm))
+    }
+
+    /**
+     * ジオメトリ: クロップ枠の平行移動（PR-28b・正規化キャンバス座標の増分）。
+     * 枠サイズは保持し、キャンバス外へはみ出さないようクランプする（枠は縮めない）。
+     */
+    fun onGeometryCropNudge(dx: Double, dy: Double) {
+        val current = recipe.value?.geometry ?: EditRecipe.GeometryParams()
+        val c = current.cropNorm
+        val spanX = c[2] - c[0]
+        val spanY = c[3] - c[1]
+        val maxX0 = (1.0 - spanX).coerceAtLeast(0.0)
+        val maxY0 = (1.0 - spanY).coerceAtLeast(0.0)
+        val x0 = (c[0] + dx).coerceIn(0.0, maxX0)
+        val y0 = (c[1] + dy).coerceIn(0.0, maxY0)
+        commitGeometryNormalized(current.copy(cropNorm = listOf(x0, y0, x0 + spanX, y0 + spanY)))
+    }
+
+    /**
+     * ジオメトリ: クロップ枠のサイズ変更（PR-28b・中心固定）。[factor] < 1 で枠を縮小（拡大表示）、
+     * 1 超で拡大。スパンは [EditNodeSpecs.CROP_MIN_SPAN]..1 にクランプし、キャンバス外へ出さない。
+     */
+    fun onGeometryCropScale(factor: Double) {
+        if (!factor.isFinite() || factor <= 0.0) return
+        val current = recipe.value?.geometry ?: EditRecipe.GeometryParams()
+        val c = current.cropNorm
+        val cx = (c[0] + c[2]) / 2.0
+        val cy = (c[1] + c[3]) / 2.0
+        val spanX = ((c[2] - c[0]) * factor).coerceIn(EditNodeSpecs.CROP_MIN_SPAN, 1.0)
+        val spanY = ((c[3] - c[1]) * factor).coerceIn(EditNodeSpecs.CROP_MIN_SPAN, 1.0)
+        val x0 = (cx - spanX / 2.0).coerceIn(0.0, 1.0 - spanX)
+        val y0 = (cy - spanY / 2.0).coerceIn(0.0, 1.0 - spanY)
+        commitGeometryNormalized(current.copy(cropNorm = listOf(x0, y0, x0 + spanX, y0 + spanY)))
     }
 
     fun undo() {
@@ -475,8 +533,9 @@ class EditorViewModel(
 
     /**
      * キャンバス [canvasW, canvasH] に内接する・アスペクト比 [aspect] (=w/h) の
-     * 中央寄せ最大矩形（正規化座標）。M1 はエッジドラッグの自由クロップを提供せず、
-     * プリセット比の中央寄せ矩形のみ（未実装箇所は UI で明示）。
+     * 中央寄せ最大矩形（正規化座標）。PR-28b の自由クロップは本プリセットを起点に
+     * [onGeometryCropNudge]/[onGeometryCropScale] で枠を動かす最小版
+     * （プレビュー上のエッジドラッグは未実装・UI で明示）。
      */
     private fun centeredMaxRect(canvasW: Double, canvasH: Double, aspect: Double): List<Double> {
         val canvasAspect = canvasW / canvasH
@@ -613,7 +672,7 @@ class EditorViewModel(
                     val full = g.cropNorm == EditRecipe.GeometryParams().cropNorm
                     val crop = if (full) null else strings.get(EditorR.string.editor_history_crop)
                     val detail = listOf(
-                        strings.get(EditorR.string.editor_history_rotation, g.angleDeg.toInt()),
+                        strings.get(EditorR.string.editor_history_rotation, formatAngleDeg(g.angleDeg)),
                         flips,
                         crop,
                     ).filterNotNull().joinToString("・")
@@ -641,6 +700,16 @@ class EditorViewModel(
             label = label.trim(),
             committedAt = item.committedAt,
         )
+    }
+
+    /** 角度の表示文字列（1 桁小数・整数は整数のまま・ロケール非依存）。履歴/UI の共通整形。 */
+    private fun formatAngleDeg(deg: Double): String {
+        val rounded = (deg * 10.0).roundToInt() / 10.0
+        return if (rounded == rounded.toLong().toDouble()) {
+            rounded.toLong().toString()
+        } else {
+            String.format(java.util.Locale.ROOT, "%.1f", rounded)
+        }
     }
 
     /** curve 履歴行のチャンネル表示（null=master。未知値は master 表示へ安全側で落とす）。 */

@@ -83,7 +83,11 @@ data class EditRecipe(
     data class GeometryParams(
         /** cropNorm: [x0,y0,x1,y1] 正規化座標（0.0..1.0）。回転・反転後の正準向きで定義する。 */
         val cropNorm: List<Double> = listOf(0.0, 0.0, 1.0, 1.0),
-        /** 回転は 90°刻みのみ（EditNodeSpecs.ALLOWED_ANGLE_DEG）。自由角度は M1 未実装。 */
+        /**
+         * 回転角（度・時計回り）。PR-28b で自由角度を実装。
+         * 保存時は [EditNodeSpecs.normalizeGeometry] が [0,360) の正準域へ畳み込む
+         * （90°の倍数は無劣化のピクセル再索引、それ以外は黒縁付き任意角リサンプル）。
+         */
         val angleDeg: Double = 0.0,
         val mirrorX: Boolean = false,
         /** 垂直反転（M1 追加。旧データの復号では既定 false の追加フィールド）。 */

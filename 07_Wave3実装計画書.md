@@ -246,6 +246,95 @@ payload v1 契約どおり・`edit_documents.currentRevision=5`。
 
 **残置/未確認**: カーブダブルタップ点削除はコード実装のみで**実機未観測**（adb 短間隔 tap で未再現）→ 28b の実機作業で併検。48MP proxy 性能記録は 28c（D2・NFR-04 実測）と fixture 待ちに含める。
 
+### 12.2 PR-28b 実施結果（✅ 2026-10-26・28c と 1 コミットに統合〔push なし・⑧〕）
+
+**変更（モデル/レンダー/VM/UI/文言）**:
+
+- `EditNodeSpecs`: 角度ホワイトリスト（`ALLOWED_ANGLE_DEG`/`isAllowedAngle`）を撤去し、
+  `canonicalAngleDeg`（有限のみ・[0,360)・±1e-12 は 0）へ置換。`fineAngleDeg` は
+  「90°基準からの ±45°」を返す純関数（境界 45/135/225/315 は +45 側=基準を下侧に取る）。
+  `normalizeGeometry` は任意の有限角度を受け付け、crop は span>0・[0,1] クランプを維持。
+- `RecipeGeometry`: 任意角の逆写像（CW 回転の解析式・双一次補間・外周 `0xFF000000`）+
+  bbox 拡張 `outputSize`（ceil）。90° 倍数は従来のピクセル再索引を厳密経路として維持
+  （補間誤差ゼロ）。適用順は不変「回転→反転→クロップ」。
+- `EditorViewModel`: `onGeometryRotate` は加算 ±90、`onGeometryFineAngle`（基準維持）、
+  `onGeometryAngleReset`、`onGeometryCropNudge`（span 保持・クランプ）、
+  `onGeometryCropScale`（中心固定・CROP_MIN_SPAN..1）。履歴表示は `formatAngleDeg`。
+- `EditorScreen`: GEOMETRY タブに微調整スライダー（−45..45）+ 数値入力ダイアログ + 0° 戻し、
+  クロップ移動 4 矢印 + 縮小/拡大。プレビュー canvas は出力 bbox を反映。
+- 文言: `editor_tab_hint_geometry`・`editor_crop_unimplemented` を撤去（2 key）、
+  角度/移動/サイズ 9 key を追加（08 台帳 §1/§5）。payload 形状は v1 のまま
+  （`angleDeg` の値域のみ連続化・旧行はそのまま読める）。
+
+**JVM 固定値**: 任意角 30° の出力寸法 4×2→5×4 と画素配列の完全固定・周期性
+（30°+360°=同一）・90° 厳密経路一致・外周黒・適用順・`applyIfNeeded` 恒等。
+角度正準化（3.5→3.5・−90→270・360→0）・fineAngle（46→−44・315→+45）・
+crop クランプ/span 拒否・NaN 拒否を追加。
+
+**実機検証（TB710FU・API 36・`HA2EPG4J`・screencap/ uiautomator / run-as DB）**:
+
+| 検証 | 結果 |
+|---|---|
+| golden ΔE 5/5 | 既存 3 基線**ビット一致**（0.507666/1.221216・0.525469/1.192629・0.099962/0.823092）+ D1 0.516351/1.106067 + **D4（12.5°+crop 0.1/0.1/0.9/0.9）mean 0.276837 / p95 1.218100 / p99 2.238108**（2,607,120 px・2048×1365 合成 q90）< しきい値（mean 1.00 / p95 2.00） |
+| 自由角度 UI | 45° 適用（黒縁回転をスクショ確認・r6）→ 0°（r7）→ 90°（r8）→ 微調整 +9.545° で表示 99.5°（r9）。角度は DB で [0,360) 正準 |
+| 自由クロップ UI | 99.5° 状態で 1:1 → 0/9/100/91%（x0=0 のため ← はクランプ）→ 0° 復帰後 1:1 13/0/88/100%（r14）→ ←2 回 9/0/84/100%（r16）→ 縮小 12/5/80/95%（r17）→ undo r18（9/0/84/100%）→ redo r19（12/5/80/95%） |
+| undo/redo/再起動 | force-stop→再起動で r19・履歴 19 件・同クロップを復元。DB 19 行すべて payload 形状正常・r1..r5 は事前スナップショットと完全一致・integrity ok・FATAL 0 |
+| kill 注入 | **30/30 PASS**（終端 `edit_revisions=19` / `edit_documents=1` / `assets=1`・db pull OK・新規 FATAL 0） |
+
+**未確認/残置**: カーブのダブルタップ点削除は実機未観察（コードのみ・adb 短間隔 tap で未再現）。
+48MP proxy の性能/画質記録は fixture 待ち（28c の 12MP 降格閾値は preview 実測で校正し、
+48MP 実測は未測定のまま明記）。
+
+---
+
+### 12.3 PR-28c 実施結果（✅ 2026-10-26・28b と 1 コミットに統合〔push なし・⑧〕）
+
+- 統合理由: 28b の実機検証中に 28c の実装を進めたため、28b 単独で緑の履歴を作れない
+  （共有ファイルの hunk 分離は検証不能な中間状態を生む）。両 PR の受入証跡は上表/12.2 のとおり
+  別々に取得済み。
+
+**変更（モデル/レンダー/UI/文言）**:
+
+- `AdjustmentId`: `DETAIL_SHARPEN` / `DETAIL_LUMA_NOISE`（0..100 → レシピ 0..1）を追加。
+  `EditEventKind.DETAIL` を RESERVED_M2 → IMPLEMENTED_M1・payload v1（スライダー共通形式）へ。
+  chromaNoise はモデル互換のため残し、未適用を警告。
+- `RecipeDetailApplier`（新規・core:render）: 輝度平面のみの unsharp（3x3 ガウス）+ 輝度 NR。
+  `L' = L + (sharpen×2.0 − lumaNoise×0.8)·(L − blur)`、RGB は `L'/L` 倍で色差保持・α 不変。
+  適用位置は develop 後・Bitmap 生成/resize 前（preview/export 同一関数・同一順序）。
+- **自動降格**: `width×height > 12,000,000` で 4 近傍ラプラシアンの軽量経路へ決定論的に切替
+  （時間計測に依存しない=同一寸法で preview=export が崩れない）。warning
+  `RecipeDetailApplier.DEGRADED_WARNING` を render warnings / export `issueNotes` に記録し、
+  EditorScreen が一致時に「処理を軽くしたため自動降格しました」を表示（ADR-014 の初結線・限定）。
+- メモリ: 輝度平面は全画素保持せず 256 行+上下 1 行ハローの帯処理（帯境界は前帯最終行の
+  元輝度を carry して段差を防止・JVM テストで境界一致を固定）。
+- `EditorScreen`: ディテールタブ実装（2 スライダー+説明）。文言は `editor_tab_hint_detail`
+  撤去・`editor_detail_help`/`_degraded_notice`/`editor_adjust_detail_*` 追加（08 台帳 §1/§5）。
+- **副次修正**: 履歴 20 件超でリストが潰れるとの実機観測に対し、履歴リストを
+  `heightIn(max=168.dp)`+内部スクロール化（外側パネルのスクロールで全件到達可能）。
+  履歴は「外側パネルを下へスクロール→履歴を表示」で開く（8px はパネル viewport による
+  クリップであり、リスト自体の高さではなかった）。
+
+**JVM 固定値**: 中立 no-op・エッジ両側のコントラスト増加（暗側減/明側増）・NR で分散低下・
+色比保存/α 不変・同一入力の決定論・帯境界（y=255/256/511/512/590 が内部行と一致）・
+閾値判定（2048×1365=通常 / 4000×3000=通常 / 4001×3000=軽量 / 8000×6000=軽量）・
+sharpen と NR の相殺・非有限値の無視。
+
+**実機検証（TB710FU・API 36）**:
+
+| 検証 | 結果 |
+|---|---|
+| golden ΔE 6/6（32.5s） | 既存 3 基線**ビット一致** + D1 0.516351/1.106067 + D4 0.276837/1.218100 + **D2（sharpen0.5, lumaNR0.25）mean 0.116023 / p95 0.830512 / p99 1.4773（2,795,520px・preview=export 1836×1420）** < しきい値 |
+| UI（r20 起点） | シャープ +47（r21）→ 輝度NR +33（r22）→ undo（r23: NR 0）→ redo（r24: +47/+33）→ force-stop 再起動で r24・履歴 24 件・同値を復元 |
+| DB payload | `eventType=detail`・`{"path":"develop.detail.sharpen"|"develop.detail.lumaNoise","value","op":"apply"}`・schema v1・currentRevision=48（計測ドラッグ 24 回を含む） |
+| NFR-04 | **p50 8 / p90 14 / p95 19 / p99 25 ms（691 frames・benchmark buildType）** — しきい値 100ms に対し余裕。通常経路（2.79MP）で自動降格は発動しない |
+| kill 注入 | **30/30 PASS**・DB 48 revisions / 1 document / 2 snapshots / assets 1・WAL 424,392 B・再起動後 r48/+13/+33 を復元・FATAL 0 |
+
+**未測定/残置**: 12MP 超（48MP 級）の軽量経路は実画像 fixture 待ちで未測定。UI の降格文言は
+preview が閾値を超える場合のみ表示される（現行 preview は 1600px 級のため通常は非表示・
+export 側は issueNotes に記録）。UI 警告の全面結線は ADR-014 の既知制限どおり未実施。
+
+---
+
 ## 13. PR-29: D3 マスク（M3・schema/演算/UI 分割）
 
 - **既存計画継承**: 06 A3 判断待ち④。`02` §5.2 D3。
@@ -318,7 +407,7 @@ PR-30 (adaptive) — targetSdk 37 採用（判断待ち⑦）の直前に必須�
 | 項目 | 状態 | 確定経路 |
 |---|---|---|
 | Java `ImageDecoder` の DNG 実機復号 | 未検証（[文書] のみ） | PR-24 spike |
-| `Bitmap.compress` による gainmap 保全の可否 | 未検証（[文書] は基本操作言及のみ） | PR-22 spike |
+| `Bitmap.compress` による gainmap 保全の可否 | **✅ 実測済（2026-10-25・PR-22 spike）**: 全画素 1.27 乗算+gainmap 未修正の compress でマーカー XMP/hdrgm/ISO 21496/MPF 全存続・再 decode で諸元完全保全（TB710FU/API 36）。→ ADR-026 stage-1 条件付き pass-through の根拠 | PR-22 spike【更新 2026-10-26】 |
 | TB710FU の HDR 撮影（RAW/PRO）対応 | 未確認 | PR-22/24 の fixture 調達時に実測 |
 | bundletool jar の要取得（ネットワーク） | 最新版番号は取得時に台帳化 | PR-17 |
 | AGP 9.4 への Kotlin/Compose バージョン随伴 | **解決（2026-10-25・PR-21）**: built-in Kotlin は AGP 9.4.0 が Kotlin 2.2.10 を同梱し独立変更不可のため、KGP 由来プラグイン（jvm/serialization/compose）を 2.2.10 に統一。kotlin-android は適用禁止化・jvmTarget は compileOptions 既定継承で明示不要を公式確認済み（[文書] 2026-09-15 更新版） | 実装済み（gradle/libs.versions.toml コメントに根拠記載）。再検討は Kotlin 3.x 正本化（built-in Kotlin の移行先）時 |

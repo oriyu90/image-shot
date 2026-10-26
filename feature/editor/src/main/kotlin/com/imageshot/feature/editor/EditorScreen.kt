@@ -67,8 +67,9 @@ import kotlin.math.roundToInt
  * - 中央プレビュー: pinch ズーム（1x..8x）+ 二本指パン。長押し Before/After は下部の
  *   専用ホールドボタンで行う（ピンチ/パンとタップ長押しのジェスチャ競合を避ける）。
  * - 下部ツールタブ: 基本調整 / カーブ（master + R/G/B チャンネル・PR-28a） / HSL（8系統） /
- *   ジオメトリ（90°回転・反転・プリセット比クロップ）は実装。ディテール/局部補正は
- *   未実装として明示表示。自由角度回転・自由クロップ・透視/レンズ補正は未実装（各タブ内で明示）。
+ *   ジオメトリ（90°+微調整の回転・反転・プリセット比+移動/サイズのクロップ・PR-28b） /
+ *   ディテール（シャープ・輝度NR・PR-28c）は実装。局部補正は未実装として明示表示。
+ *   プレビュー上のエッジドラッグ・透視/レンズ補正は未実装（各タブ内で明示）。
  * - スライダー操作はスキーマ（AdjustmentId）から生成。ドラッグ反映は即時、
  *   離した時点で1件確定（onDragEnd → EditStore.commit）。カーブは指を離した時点で
  *   絶対状態イベント確定、ジオメトリはボタン操作ごとに1件確定。
@@ -88,6 +89,10 @@ fun EditorScreen(
     onGeometryFlip: (Boolean) -> Unit,
     onGeometryCrop: (Double?) -> Unit,
     onGeometryResetCrop: () -> Unit,
+    onGeometryAngle: (Double) -> Unit,
+    onGeometryAngleReset: () -> Unit,
+    onGeometryCropNudge: (Double, Double) -> Unit,
+    onGeometryCropScale: (Double) -> Unit,
     onUndo: () -> Unit,
     onRedo: () -> Unit,
     onBeforeChanged: (Boolean) -> Unit,
@@ -109,6 +114,18 @@ fun EditorScreen(
                 .fillMaxWidth()
                 .weight(1f),
         )
+        if (state.renderWarnings.contains(com.imageshot.core.render.RecipeDetailApplier.DEGRADED_WARNING)) {
+            // PR-28c: 性能契約（自動降格）の明示。ADR-014 の UI 警告経路の初結線（限定）。
+            Text(
+                text = stringResource(EditorR.string.editor_detail_degraded_notice),
+                style = MaterialTheme.typography.labelSmall,
+                color = EditorPalette.accent,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(EditorPalette.panelRaised)
+                    .padding(horizontal = 12.dp, vertical = 4.dp),
+            )
+        }
         ToolPanel(
             state = state,
             onSliderPreview = onSliderPreview,
@@ -121,6 +138,10 @@ fun EditorScreen(
             onGeometryFlip = onGeometryFlip,
             onGeometryCrop = onGeometryCrop,
             onGeometryResetCrop = onGeometryResetCrop,
+            onGeometryAngle = onGeometryAngle,
+            onGeometryAngleReset = onGeometryAngleReset,
+            onGeometryCropNudge = onGeometryCropNudge,
+            onGeometryCropScale = onGeometryCropScale,
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(max = 360.dp)
@@ -293,8 +314,8 @@ private enum class EditorToolTab(val labelRes: Int, val hintRes: Int?, val imple
     BASIC(EditorR.string.editor_tab_basic, null, true),
     CURVE(EditorR.string.editor_tab_curve, null, true),
     HSL(EditorR.string.editor_tab_hsl, null, true),
-    GEOMETRY(EditorR.string.editor_tab_geometry, EditorR.string.editor_tab_hint_geometry, true),
-    DETAIL(EditorR.string.editor_tab_detail, EditorR.string.editor_tab_hint_detail, false),
+    GEOMETRY(EditorR.string.editor_tab_geometry, null, true),
+    DETAIL(EditorR.string.editor_tab_detail, null, true),
     LOCAL(EditorR.string.editor_tab_local, EditorR.string.editor_tab_hint_local, false),
 }
 
@@ -311,6 +332,10 @@ private fun ToolPanel(
     onGeometryFlip: (Boolean) -> Unit,
     onGeometryCrop: (Double?) -> Unit,
     onGeometryResetCrop: () -> Unit,
+    onGeometryAngle: (Double) -> Unit,
+    onGeometryAngleReset: () -> Unit,
+    onGeometryCropNudge: (Double, Double) -> Unit,
+    onGeometryCropScale: (Double) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var selected by remember { mutableStateOf(EditorToolTab.BASIC) }
@@ -345,11 +370,18 @@ private fun ToolPanel(
                 onCurveChannelSelect = onCurveChannelSelect,
             )
             EditorToolTab.HSL -> HslContent(state, onSliderPreview, onSliderCommit)
-            EditorToolTab.GEOMETRY -> GeometryContent(state, onGeometryRotate, onGeometryFlip, onGeometryCrop, onGeometryResetCrop)
-            EditorToolTab.DETAIL -> UnimplementedContent(
-                titleRes = EditorR.string.editor_detail_title,
-                messageRes = EditorR.string.editor_detail_notice,
+            EditorToolTab.GEOMETRY -> GeometryContent(
+                state = state,
+                onRotate = onGeometryRotate,
+                onFlip = onGeometryFlip,
+                onCrop = onGeometryCrop,
+                onCropReset = onGeometryResetCrop,
+                onAngle = onGeometryAngle,
+                onAngleReset = onGeometryAngleReset,
+                onCropNudge = onGeometryCropNudge,
+                onCropScale = onGeometryCropScale,
             )
+            EditorToolTab.DETAIL -> DetailContent(state, onSliderPreview, onSliderCommit)
             EditorToolTab.LOCAL -> UnimplementedContent(
                 titleRes = EditorR.string.editor_local_title,
                 messageRes = EditorR.string.editor_local_notice,
@@ -371,7 +403,15 @@ private fun ToolPanel(
             )
         }
         if (historyOpen) {
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            // 履歴は件数が増えると親パネルの固定高で潰れる（実機 20 件で高さ約 8px・
+            // スクロール不能を観測）。上限高+内部スクロールで全件到達可能にする。
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 168.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
                 state.history.asReversed().forEach { row ->
                     Text(
                         text = "r${row.revisionNo}  ${row.label}",
@@ -476,6 +516,47 @@ private fun BasicAdjustmentsContent(
             onCommit = onSliderCommit,
         )
     }
+}
+
+// --------------------------------------------------------------- ディテールタブ
+
+/**
+ * ディテール（PR-28c）: シャープ / 輝度ノイズ低減の 2 スライダー。
+ * - 値は AdjustmentId（0..100）で、レシピには 0..1 に正規化して保存する。
+ * - 空間 stage は develop 後・リサイズ前（preview/export 同一・[RecipeDetailApplier] が正本）。
+ * - 画素数が閾値超過のときは軽量経路へ自動降格し、プレビュー上部に明示する（[EditorScreen]）。
+ */
+@Composable
+private fun DetailContent(
+    state: EditorViewModel.EditorState,
+    onSliderPreview: (AdjustmentId, Double) -> Unit,
+    onSliderCommit: (AdjustmentId, Double) -> Unit,
+) {
+    Text(
+        text = stringResource(EditorR.string.editor_detail_title),
+        style = MaterialTheme.typography.titleSmall,
+        color = EditorPalette.textPrimary,
+        modifier = Modifier.padding(top = 8.dp),
+    )
+    Text(
+        text = stringResource(EditorR.string.editor_detail_notice),
+        style = MaterialTheme.typography.labelSmall,
+        color = EditorPalette.textSecondary,
+    )
+    state.sliders.filter { bind -> bind.id.kind == EditEventKind.DETAIL }.forEach { bind ->
+        SliderRow(
+            id = bind.id,
+            value = bind.value,
+            onPreview = onSliderPreview,
+            onCommit = onSliderCommit,
+        )
+    }
+    Text(
+        text = stringResource(EditorR.string.editor_detail_help),
+        style = MaterialTheme.typography.labelSmall,
+        color = EditorPalette.textSecondary,
+        modifier = Modifier.padding(top = 4.dp),
+    )
 }
 
 // --------------------------------------------------------------- カーブタブ（master + R/G/B）
@@ -780,9 +861,13 @@ private fun HslContent(
 // --------------------------------------------------------------- ジオメトリタブ
 
 /**
- * ジオメトリ（§5.2 M1 範囲）: 90°単位回転 / 水平・垂直反転 / アスペクト比プリセットの
- * 中央寄せ最大矩形クロップ。ボタン操作ごとに絶対状態を1件確定。自由角度・自由クロップ
- * （エッジドラッグ）・透視/レンズ補正は未実装として明示。
+ * ジオメトリ（§5.2・PR-28b で自由角度/自由クロップの最小版を追加）:
+ * - 回転: 90°ボタン（現在角へ加算）+ 微調整スライダー（±45°・中心角は 90°刻み基準を保持）。
+ *   任意角は黒縁付きの外接矩形キャンバスへ展開する（塗り仕様はユーザー確定 2026-10-26）。
+ * - 反転: 水平/垂直トグル。
+ * - クロップ: アスペクト比プリセット + 枠の平行移動（←→↑↓）+ 枠サイズ（小さく/大きく）。
+ *   プレビュー上のエッジドラッグと透視/レンズ補正は未実装（UI で明示）。
+ * - 操作はすべて絶対状態の1イベントとして確定し、undo/redo の対象になる。
  */
 @Composable
 private fun GeometryContent(
@@ -791,6 +876,10 @@ private fun GeometryContent(
     onFlip: (Boolean) -> Unit,
     onCrop: (Double?) -> Unit,
     onCropReset: () -> Unit,
+    onAngle: (Double) -> Unit,
+    onAngleReset: () -> Unit,
+    onCropNudge: (Double, Double) -> Unit,
+    onCropScale: (Double) -> Unit,
 ) {
     Text(
         text = stringResource(EditorR.string.editor_geometry_title),
@@ -823,12 +912,64 @@ private fun GeometryContent(
     Text(
         text = stringResource(
             EditorR.string.editor_geometry_status,
-            state.geometry.angleDeg.toInt(),
+            formatAngleText(state.geometry.angleDeg),
             cropSummary(state.geometry, stringResource(EditorR.string.editor_crop_none)),
         ),
         style = MaterialTheme.typography.labelSmall,
         color = EditorPalette.textSecondary,
     )
+
+    // ---- 角度の微調整（±45°・90°刻み基準は保持）----
+    var fineAngle by remember(state.geometry.angleDeg) {
+        mutableStateOf(EditNodeSpecs.fineAngleDeg(state.geometry.angleDeg))
+    }
+    var angleDialogOpen by remember { mutableStateOf(false) }
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = stringResource(EditorR.string.editor_geometry_angle_title),
+            style = MaterialTheme.typography.bodySmall,
+            color = EditorPalette.textPrimary,
+            modifier = Modifier.padding(end = 8.dp),
+        )
+        TextButton(
+            onClick = { angleDialogOpen = true },
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+        ) {
+            Text(
+                text = formatAngleText(fineAngle) + "°",
+                style = MaterialTheme.typography.bodySmall,
+                color = EditorPalette.textSecondary,
+            )
+        }
+    }
+    Slider(
+        value = fineAngle.toFloat(),
+        onValueChange = { fineAngle = it.toDouble() },
+        onValueChangeFinished = { onAngle(fineAngle) },
+        valueRange = -45f..45f,
+        colors = SliderDefaults.colors(
+            thumbColor = EditorPalette.accent,
+            activeTrackColor = EditorPalette.accent,
+            inactiveTrackColor = EditorPalette.line,
+        ),
+    )
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        TextButton(onClick = { fineAngle = 0.0; onAngleReset() }) {
+            Text(stringResource(EditorR.string.editor_geometry_angle_reset), color = EditorPalette.textPrimary)
+        }
+    }
+    if (angleDialogOpen) {
+        GeometryAngleDialog(
+            current = fineAngle,
+            onDismiss = { angleDialogOpen = false },
+            onConfirm = { parsed ->
+                angleDialogOpen = false
+                fineAngle = parsed
+                onAngle(parsed)
+            },
+        )
+    }
+
     Text(
         text = stringResource(EditorR.string.editor_crop_header),
         style = MaterialTheme.typography.bodySmall,
@@ -846,11 +987,48 @@ private fun GeometryContent(
             }
         }
     }
+    // 自由クロップ最小版: 枠の平行移動（キャンバスの 2%）と中心固定のサイズ変更。
     Text(
-        text = stringResource(EditorR.string.editor_crop_unimplemented),
+        text = stringResource(EditorR.string.editor_crop_move_header),
         style = MaterialTheme.typography.labelSmall,
         color = EditorPalette.textSecondary,
+        modifier = Modifier.padding(top = 6.dp),
     )
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        TextButton(onClick = { onCropNudge(-CROP_NUDGE, 0.0) }) {
+            Text(stringResource(EditorR.string.editor_crop_move_left), color = EditorPalette.textPrimary)
+        }
+        TextButton(onClick = { onCropNudge(CROP_NUDGE, 0.0) }) {
+            Text(stringResource(EditorR.string.editor_crop_move_right), color = EditorPalette.textPrimary)
+        }
+        TextButton(onClick = { onCropNudge(0.0, -CROP_NUDGE) }) {
+            Text(stringResource(EditorR.string.editor_crop_move_up), color = EditorPalette.textPrimary)
+        }
+        TextButton(onClick = { onCropNudge(0.0, CROP_NUDGE) }) {
+            Text(stringResource(EditorR.string.editor_crop_move_down), color = EditorPalette.textPrimary)
+        }
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        TextButton(onClick = { onCropScale(0.9) }) {
+            Text(stringResource(EditorR.string.editor_crop_shrink), color = EditorPalette.textPrimary)
+        }
+        TextButton(onClick = { onCropScale(1.1) }) {
+            Text(stringResource(EditorR.string.editor_crop_grow), color = EditorPalette.textPrimary)
+        }
+    }
+}
+
+/** クロップ移動の1操作あたりの正規化増分（キャンバス比 2%）。 */
+private const val CROP_NUDGE = 0.02
+
+/** 角度の表示文字列（1桁小数・整数は整数・ロケール非依存）。 */
+private fun formatAngleText(deg: Double): String {
+    val rounded = (deg * 10.0).roundToInt() / 10.0
+    return if (rounded == rounded.toLong().toDouble()) {
+        rounded.toLong().toString()
+    } else {
+        String.format(java.util.Locale.ROOT, "%.1f", rounded)
+    }
 }
 
 private fun cropSummary(g: EditRecipe.GeometryParams, noneLabel: String): String =
@@ -859,6 +1037,66 @@ private fun cropSummary(g: EditRecipe.GeometryParams, noneLabel: String): String
     } else {
         g.cropNorm.joinToString(", ") { (it * 100).roundToInt().toString() + "%" }
     }
+
+/** 角度（微調整）の数値入力ダイアログ。範囲は -45..45。 */
+@Composable
+private fun GeometryAngleDialog(
+    current: Double,
+    onDismiss: () -> Unit,
+    onConfirm: (Double) -> Unit,
+) {
+    var text by remember { mutableStateOf(formatAngleText(current)) }
+    var errorText by remember { mutableStateOf<String?>(null) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = stringResource(EditorR.string.editor_geometry_angle_title),
+                color = EditorPalette.textPrimary,
+            )
+        },
+        text = {
+            Column {
+                TextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                )
+                if (errorText != null) {
+                    Text(
+                        text = errorText!!,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = EditorPalette.error,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
+                Text(
+                    text = stringResource(EditorR.string.editor_number_hint, -45, 45),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = EditorPalette.textSecondary,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+            }
+        },
+        confirmButton = {
+            val msgEmpty = stringResource(EditorR.string.editor_number_error_empty)
+            TextButton(
+                onClick = {
+                    val parsed = text.trim().toDoubleOrNull()
+                    if (parsed == null || !parsed.isFinite()) {
+                        errorText = msgEmpty
+                    } else {
+                        onConfirm(parsed.coerceIn(-45.0, 45.0))
+                    }
+                },
+            ) { Text(stringResource(EditorR.string.editor_button_confirm)) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(EditorR.string.editor_button_cancel)) }
+        },
+    )
+}
 
 // --------------------------------------------------------------- 未実装タブ表示
 

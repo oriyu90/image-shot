@@ -97,6 +97,33 @@ class GoldenPreviewExportDeltaETest {
     }
 
     @Test
+    fun goldenDeltaE_detailSharpenAndLumaNr_nonNeutral() {
+        // PR-28c D2: シャープ（0.5）+ 輝度 NR（0.25）のプレビュー/書き出し同値契約。
+        // 空間 stage は develop 後・resize 前で同一関数（画素数 2.79MP < 12MP の通常経路）。
+        runGoldenCase(
+            case = "detail(sharpen0.5,lumaNR0.25)-non-neutral",
+            recipe = detailRecipe(),
+            meanMax = NONNEUTRAL_MEAN_MAX,
+            p95Max = NONNEUTRAL_P95_MAX,
+            provisional = false,
+        )
+    }
+
+    @Test
+    fun goldenDeltaE_freeAngleRotationAndCrop_nonNeutral() {
+        // PR-28b D4: 任意角回転（12.5°・黒縁付き外接矩形+バイリニア逆写像）+ 自由クロップ
+        // （[0.1,0.1,0.9,0.9]）のプレビュー/書き出し同値契約。回転は補間を伴うため
+        // 非中立しきい値（mean<1.0 / p95<2.0）を共用する。
+        runGoldenCase(
+            case = "free-angle(12.5deg)+crop(0.1,0.1,0.9,0.9)-non-neutral",
+            recipe = freeAngleCropRecipe(),
+            meanMax = NONNEUTRAL_MEAN_MAX,
+            p95Max = NONNEUTRAL_P95_MAX,
+            provisional = false,
+        )
+    }
+
+    @Test
     fun goldenDeltaE_perChannelCurve_nonNeutral() {
         // PR-28a D1: R/G/B チャンネルカーブ（r=中間点リフト / g=未編集 / b=上域沈め）の
         // プレビュー/書き出し同値契約。非中立しきい値（mean<1.0 / p95<2.0）を共用する
@@ -431,6 +458,29 @@ class GoldenPreviewExportDeltaETest {
         ),
     )
 
+    /**
+     * PR-28b D4: 自由角度 + 自由クロップの golden recipe。
+     * 12.5° は 90°刻みでないため任意角リサンプル経路（バイリニア）、crop は回転後正準向きの
+     * 正規化矩形。しきい値は既存の非中立ケースと共用。
+     */
+    private fun freeAngleCropRecipe(): EditRecipe = EditRecipe(
+        documentId = "golden-deltae",
+        source = EditRecipe.RecipeSource(assetId = "asset-1", fingerprint = "fp-golden"),
+        geometry = EditRecipe.GeometryParams(
+            cropNorm = listOf(0.1, 0.1, 0.9, 0.9),
+            angleDeg = 12.5,
+        ),
+    )
+
+    /** PR-28c D2: シャープ + 輝度 NR の golden recipe（8bit sRGB・0..1 正規化値）。 */
+    private fun detailRecipe(): EditRecipe = EditRecipe(
+        documentId = "golden-deltae",
+        source = EditRecipe.RecipeSource(assetId = "asset-1", fingerprint = "fp-golden"),
+        develop = EditRecipe.DevelopParams(
+            detail = EditRecipe.Detail(sharpen = 0.5, lumaNoise = 0.25),
+        ),
+    )
+
     // ------------------------------------------------------------------ 成果物 JSON
 
     @Synchronized
@@ -493,7 +543,15 @@ class GoldenPreviewExportDeltaETest {
                         .put("g", recipe.develop.curve.g.size)
                         .put("b", recipe.develop.curve.b.size),
                 )
-                .put("geometryNeutral", recipe.geometry == EditRecipe.GeometryParams()),
+                .put("geometryNeutral", recipe.geometry == EditRecipe.GeometryParams())
+                // PR-28b D4: 戻る互換のため追加キーのみ（既存キー不変）。
+                .put("geometryAngleDeg", recipe.geometry.angleDeg)
+                .put(
+                    "geometryCrop",
+                    JSONArray().apply { recipe.geometry.cropNorm.forEach { put(it) } },
+                )
+                .put("detailSharpen", recipe.develop.detail.sharpen)
+                .put("detailLumaNoise", recipe.develop.detail.lumaNoise)
         )
         .put(
             "preview",

@@ -1,6 +1,6 @@
 # Prism Photo（Image Shot / com.imageshot.app）— Android 16+ 写真現像・編集アプリ設計パック
 
-作成: 2026-10-18 / 状態: 調査に基づく**開発基準案** + Gradleマルチモジュール雛形。性能・画質の数値は実装済みを意味しない。
+作成: 2026-10-18 / 最終更新: 2026-10-26 / 状態: 調査に基づく**開発基準案** + Gradleマルチモジュール雛形。性能・画質の数値は実装済みを意味しない。
 
 ## 同梱物
 
@@ -29,7 +29,7 @@ Android 16（API 36）以降専用。`./gradlew :app:assembleDebug` で `app` AP
 | `feature/editor` | 編集画面骨格（プレビュー/スライダー/履歴） | プレビューサーフェスは Sprint C |
 | `feature/export` | 書き出し画面 + ExportJob キュー（WorkManager実働は Sprint C） | — |
 
-ビルド正本バージョンは `gradle/libs.versions.toml`（AGP 8.13.2 / Kotlin 2.2.21 / KSP 2.2.21-2.0.5 / Compose BOM 2025.06.01 / Room 2.8.5 / WorkManager 2.10.5 / Coil 3.3.0 / kotlinx-serialization 1.11.0 / navigation-compose 2.9.5 / Gradle 8.14.3 wrapper）。Coil 3.4+ と Compose BOM 2026.x は Kotlin/compileSdk 37 前提のため、便宜上の旧世代を選択している（Kotlin 正本を 2.4/3.x に引き上げる際に再更新する）。
+ビルド正本バージョンは `gradle/libs.versions.toml`（**PR-21・2026-10-25 更新: AGP 9.4.0 / built-in Kotlin 2.2.10 / KSP 2.3.12 / Gradle 9.6.0 wrapper** / Compose BOM 2025.06.01 / Room 2.8.5 / WorkManager 2.10.5 / Coil 3.3.0 / kotlinx-serialization 1.11.0 / navigation-compose 2.9.5）。built-in Kotlin は AGP 同梱版が正本であり独立には変更できない（KGP 由来プラグインも 2.2.10 に統一）。Coil 3.4+ と Compose BOM 2026.x は Kotlin/compileSdk 37 前提のため、compileSdk 36 の本雛形では旧世代を選択している（Kotlin 正本を 3.x に引き上げる際に再更新する）。
 
 ## 使用手順
 

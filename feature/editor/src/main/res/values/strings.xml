@@ -23,12 +23,12 @@
     <string name="editor_tab_geometry">ジオメトリ</string>
     <string name="editor_tab_detail">ディテール</string>
     <string name="editor_tab_local">局部補正</string>
-    <string name="editor_tab_hint_geometry">自由角度・自由クロップ・透視/レンズは未実装</string>
-    <string name="editor_tab_hint_detail">未実装（M2 予約）</string>
     <string name="editor_tab_hint_local">未実装（M3 予約）</string>
     <string name="editor_not_implemented">未実装</string>
     <string name="editor_detail_title">ディテール（シャープ/ノイズ低減）</string>
-    <string name="editor_detail_notice">M2 予約。現在のビルドには含まれず、レシピに値があっても適用されません（警告表示）。</string>
+    <string name="editor_detail_notice">シャープは輪郭の局所コントラストを強調し、輝度ノイズ低減はざらつきを滑らかにします（色差は保持）。</string>
+    <string name="editor_detail_help">0..100 の強度。適用順は「develop → ディテール → 書き出しリサイズ」でプレビューと書き出しが同一です。</string>
+    <string name="editor_detail_degraded_notice">処理を軽くしたため自動降格しました（シャープのみ適用・輝度ノイズ低減は省略）</string>
     <string name="editor_local_title">局部補正（マスク）</string>
     <string name="editor_local_notice">M3 予約。現在のビルドには含まれず、レシピにマスクがあっても適用されません（警告表示）。</string>
 
@@ -66,11 +66,20 @@
     <string name="editor_flip_h_off">水平反転: OFF</string>
     <string name="editor_flip_v_on">垂直反転: ON</string>
     <string name="editor_flip_v_off">垂直反転: OFF</string>
-    <string name="editor_geometry_status">現在: 回転%1$d° / クロップ %2$s</string>
-    <string name="editor_crop_header">クロップ（中央寄せ・プリセット比。クロップ縦横比は 90/270°回転時に自動で入れ替える）</string>
+    <string name="editor_geometry_status">現在: 回転 %1$s° / クロップ %2$s</string>
+    <string name="editor_crop_header">クロップ（中央寄せ・プリセット比）</string>
     <string name="editor_crop_original">原寸</string>
-    <string name="editor_crop_unimplemented">自由角度回転・自由クロップ（エッジドラッグ）・透視補正/レンズ補正は未実装（警告表示のまま）</string>
     <string name="editor_crop_none">なし（原寸）</string>
+    <!-- PR-28b: 自由角度（微調整）・自由クロップ最小版 -->
+    <string name="editor_geometry_angle_title">角度の微調整（±45°）</string>
+    <string name="editor_geometry_angle_reset">角度を0°に戻す</string>
+    <string name="editor_crop_move_header">クロップ枠の移動とサイズ（プリセット比を維持）</string>
+    <string name="editor_crop_move_left">←</string>
+    <string name="editor_crop_move_right">→</string>
+    <string name="editor_crop_move_up">↑</string>
+    <string name="editor_crop_move_down">↓</string>
+    <string name="editor_crop_shrink">枠を小さく</string>
+    <string name="editor_crop_grow">枠を大きく</string>
 
     <!-- 数値入力ダイアログ・下部バー -->
     <string name="editor_number_dialog_title">%1$s を数値で指定</string>
@@ -97,7 +106,7 @@
     <string name="editor_history_flip_h">水平反転</string>
     <string name="editor_history_flip_v">垂直反転</string>
     <string name="editor_history_crop">クロップ</string>
-    <string name="editor_history_rotation">回転%1$d°</string>
+    <string name="editor_history_rotation">回転%1$s°</string>
 
     <!-- スライダー表示ラベル（AdjustmentId の正本写像・feature:editor res）。 -->
     <string name="editor_adjust_exposure">露出</string>
@@ -110,6 +119,8 @@
     <string name="editor_adjust_saturation">彩度</string>
     <string name="editor_adjust_temperature">温度</string>
     <string name="editor_adjust_tint">色合い</string>
+    <string name="editor_adjust_detail_sharpen">シャープ</string>
+    <string name="editor_adjust_detail_luma_noise">輝度ノイズ低減</string>
     <string name="editor_adjust_hsl_red_hue">赤 色相</string>
     <string name="editor_adjust_hsl_red_sat">赤 彩度</string>
     <string name="editor_adjust_hsl_red_lum">赤 明るさ</string>

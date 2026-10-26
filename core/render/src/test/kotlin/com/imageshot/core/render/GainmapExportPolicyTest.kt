@@ -152,16 +152,16 @@ class GainmapExportPolicyTest {
     }
 
     @Test
-    fun `illegal geometry values block on safe side`() {
-        // 自由角度 (37.5°) は EditNodeSpecs.normalizeGeometry が null → applier に未正規化で渡る
-        // （反転/クロップは値のまま実行され得る） → 安全側で STRIP。
+    fun `free angle geometry blocks pass-through`() {
+        // PR-28b: 自由角度は適用される（リサンプル=非乗算変換）→ gainmap 同時再索引が無いため STRIP。
         val freeAngle = recipe(geometry = EditRecipe.GeometryParams(angleDeg = 37.5))
         assertEquals(GainmapExportPolicy.Mode.STRIP_TO_SDR, GainmapExportPolicy.classify(freeAngle, "JPEG"))
-        // 中立クロップと組み合わせても policy は不成立（分類不能値の安全側）。
-        val freeAngleNeutralCrop = recipe(
-            geometry = EditRecipe.GeometryParams(angleDeg = 37.5, cropNorm = listOf(0.0, 0.0, 1.0, 1.0)),
-        )
-        assertEquals(GainmapExportPolicy.Mode.STRIP_TO_SDR, GainmapExportPolicy.classify(freeAngleNeutralCrop, "JPEG"))
+        // 全周回転（360°）は中立へ正準化されるため pass-through を維持する。
+        val fullTurn = recipe(geometry = EditRecipe.GeometryParams(angleDeg = 360.0))
+        assertEquals(GainmapExportPolicy.Mode.PASS_THROUGH, GainmapExportPolicy.classify(fullTurn, "JPEG"))
+        // 非有限角は正規化不能（分類不能）→ 安全側で STRIP。
+        val nonFinite = recipe(geometry = EditRecipe.GeometryParams(angleDeg = Double.NaN))
+        assertEquals(GainmapExportPolicy.Mode.STRIP_TO_SDR, GainmapExportPolicy.classify(nonFinite, "JPEG"))
     }
 
     @Test

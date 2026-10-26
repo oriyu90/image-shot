@@ -78,7 +78,9 @@ object RecipeDevelopApplier {
      *          両利得は buildChannelLuts 内で要素積として合成され、LUT で1回だけ掛かる
      *          （旧実装では tint は暗黙に無視されていた。今回から実際に効く。トーンパイプライン
      *          順序自体は変更していない）。
-     * 【警告対象】ディテール / ジオメトリの未対応要素（自由角度・光学補正・透視）/ 局所マスク。
+     * 【警告対象】ディテール（PR-28c で適用開始）の未適用要素 / ジオメトリの未対応要素
+     * （光学補正・透視）/ 局所マスク。
+     * 自由角度回転は PR-28b で適用開始したため警告対象外（[RecipeGeometry.rotateArbitrary]）。
      */
     fun unappliedNodeWarnings(recipe: EditRecipe): List<String> {
         val warnings = mutableListOf<String>()
@@ -86,13 +88,11 @@ object RecipeDevelopApplier {
         if (d.color.hsl.any { EditNodeSpecs.parseHslKey(it.key) == null || !it.value.isFinite() }) {
             warnings += "unknown HSL keys/values preserved only (not applied)"
         }
-        if (d.detail.sharpen != 0.0 || d.detail.lumaNoise != 0.0 || d.detail.chromaNoise != 0.0) {
-            warnings += "detail nodes not applied (not implemented)"
+        // PR-28c: シャープ/輝度NR は適用済み。chromaNR のみ未適用（モデル互換のため残る）。
+        if (d.detail.chromaNoise != 0.0) {
+            warnings += "chroma noise reduction not applied (not implemented)"
         }
         val g = recipe.geometry
-        if (!EditNodeSpecs.isAllowedAngle(g.angleDeg)) {
-            warnings += "free-angle geometry rotation not applied (not implemented)"
-        }
         if (g.lensProfileId != null || g.perspective != null) {
             warnings += "lens/perspective corrections not applied (not implemented)"
         }

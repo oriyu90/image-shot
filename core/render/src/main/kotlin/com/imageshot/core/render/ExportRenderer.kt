@@ -91,7 +91,8 @@ class ExportBitmapRenderer(context: Context) {
             val sourceGainmap = if (decodedResult.hasGainmap) decoded.gainmap else null
             onStage(Stage.DECODE, 25)
 
-            val processed = applyDevelop(decoded, recipe, decodedResult.sourceOrientation)
+            val processedOutcome = applyDevelop(decoded, recipe, decodedResult.sourceOrientation)
+            val processed = processedOutcome.bitmap
             if (processed !== decoded) decoded.recycle()
             onStage(Stage.PROCESS, 45)
 
@@ -104,7 +105,7 @@ class ExportBitmapRenderer(context: Context) {
             onStage(Stage.PROCESS, 55)
 
             // 警告の基礎は recycle() より前に評価する（recycled Bitmap の状態参照を避ける）。
-            var warnings = buildWarnings(recipe, finalBitmap, spec, decodedResult)
+            var warnings = buildWarnings(recipe, finalBitmap, spec, decodedResult, processedOutcome.detailDegraded)
 
             // PR-23 (ADR-026) policy 分岐: 乗算型のみ pass-through、それ以外は SDR-only。
             // 源 gainmap が無い source（通常 JPEG）には HDR 警告を出さない（無警告=無利得）。
@@ -259,14 +260,17 @@ class ExportBitmapRenderer(context: Context) {
      * 正規化 + ジオメトリ + develop（プレビューレンダラーと同一ノード・同一パラメータ、フル解像度で適用）。
      * パイプライン順: decode（SourceDecode・sRGBターゲット）→ EXIF向き正規化
      * （SourceOrientation.normalize: orientation 1..8、不明（0）は恒等に落とす・警告側に通知）→
-     * ジオメトリ（RecipeGeometry.applyIfNeeded: 回転→反転→クロップ、ピクセル再索引=無劣化）→
-     * develop（RecipeDevelopApplier.applyToPixels 共有実装）→ resize。
+     * ジオメトリ（RecipeGeometry.applyIfNeeded: 回転→反転→クロップ）→
+     * develop（RecipeDevelopApplier.applyToPixels 共有実装）→
+     * detail（RecipeDetailApplier.applyToPixels: PR-28c・develop 後 resize 前）→ resize。
      * 【明示】プレビューはサンプリング後の同一変換を適用するため、クロップは正規化座標で
      * 一致するが、画素グリッドの丸め差（±1px 相当）は原理的に残る。
-     * R/G/B チャンネルカーブ・自由角度・光学補正・局所マスク・ディテールは未適用。
+     * 光学補正・局所マスク・chromaNR は未適用。自由角度/ディテール（sharpen+lumaNR）は適用。
      * 既定値でない場合は buildWarnings 経由で必ず警告する（ADR-014）。
      */
-    private fun applyDevelop(source: Bitmap, recipe: EditRecipe, sourceOrientation: Int): Bitmap {
+    private data class ProcessedOutcome(val bitmap: Bitmap, val detailDegraded: Boolean)
+
+    private fun applyDevelop(source: Bitmap, recipe: EditRecipe, sourceOrientation: Int): ProcessedOutcome {
         val width = source.width
         val height = source.height
         var pixels = IntArray(width * height)
@@ -290,9 +294,11 @@ class ExportBitmapRenderer(context: Context) {
         )
         pixels = plane.pixels
         RecipeDevelopApplier.applyToPixels(pixels, recipe.develop)
+        // PR-28c: 空間 stage（develop 後・resize 前・preview と同一関数/同一順序）。
+        val detail = RecipeDetailApplier.applyToPixels(pixels, plane.width, plane.height, recipe.develop.detail)
         val out = Bitmap.createBitmap(plane.width, plane.height, Bitmap.Config.ARGB_8888)
         out.setPixels(pixels, 0, plane.width, 0, 0, plane.width, plane.height)
-        return out
+        return ProcessedOutcome(out, detail.degraded)
     }
 
     private fun resizeToMaxEdge(source: Bitmap, maxEdgePx: Int): Bitmap {
@@ -310,6 +316,7 @@ class ExportBitmapRenderer(context: Context) {
         result: Bitmap,
         spec: ExportRenderSpec,
         decode: SourceDecode.Result,
+        detailDegraded: Boolean,
     ): List<String> {
         val warnings = mutableListOf(
             // 8bit sRGB CPU パイプライン（プレビューと同一ノード実装）は恒常降格として明示（§6.1/ADR-014）。
@@ -327,6 +334,7 @@ class ExportBitmapRenderer(context: Context) {
         if (decode.usedFallback) warnings += SourceDecode.FALLBACK_BITMAP_FACTORY_WARNING
         // この段階で読まないノードは、既定値でないときのみ警告する（develop 適用ノードを偽警告にしない）。
         warnings += RecipeDevelopApplier.unappliedNodeWarnings(recipe)
+        if (detailDegraded) warnings += RecipeDetailApplier.DEGRADED_WARNING
         if (recipe.displayIntent != "auto-sdr-hdr") {
             warnings += "displayIntent handling not implemented at export"
         }

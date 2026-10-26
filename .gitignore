@@ -10,3 +10,7 @@ captures/
 *.keystore
 *.jks
 !keystore/**/*.jks.enc
+
+# 画面証跡（AGENTS: shots/ のみ・Git 管理外）
+shots/
+.kotlin/

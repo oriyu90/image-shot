@@ -29,9 +29,9 @@ const val LEGACY_EVENT_TYPE_PARAM = "param"
  *
  * - `id` は EditRevision.eventType 列に書込む安定型ID（英語・永続形式）。将来の形式変更でも
  *   id を再利用しない。
- * - IMPLEMENTED_M1: tone/wb/color（スライダー）+ curve（全体/master カーブ）+ hsl（8系統）+
- *   geometry（90°回転/反転/プリセット・クロップ）。detail は RESERVED_M2、local は RESERVED_M3。
- *   RESERVED は形状未確定であり、適用も解釈もしない（PRESERVED_ONLY、§7.1）。
+ * - IMPLEMENTED_M1: tone/wb/color（スライダー）+ curve（全体/master + R/G/B）+ hsl（8系統）+
+ *   geometry（自由角度/反転/自由クロップ）+ detail（シャープ/輝度NR・PR-28c）。
+ *   local は RESERVED_M3。RESERVED は形状未確定であり、適用も解釈もしない（PRESERVED_ONLY、§7.1）。
  * - payload 形式は保存列側で `payloadSchemaVersion` を伴う JSON で保存する（ADR-022 確定）。
  */
 enum class EditEventKind(
@@ -96,12 +96,18 @@ enum class EditEventKind(
         PAYLOAD_SHAPE_SCHEMA_VERSION_1,
     ),
 
-    /** ディテール（シャープ/テクスチャ/明瞭度/かすみ/ノイズ軽減等）。payload 未設計。 */
+    /**
+     * ディテール（PR-28c でシャープ/輝度ノイズ低減を適用開始）。
+     * payload 形状 v1: スライダー共通形式
+     * `{"path":"develop.detail.sharpen"|"develop.detail.lumaNoise","value","op"}`。
+     * chromaNoise はモデルに存在するが本世代の UI/適用対象外（未適用のまま警告する）。
+     * 空間フィルタは develop 後・resize 前の正本順序で適用（preview/export 同一）。
+     */
     DETAIL(
         "detail",
-        "ディテール: シャープ/テクスチャ/明瞭度/かすみ/ノイズ軽減等",
-        EditEventStatus.RESERVED_M2,
-        null,
+        "ディテール: シャープ/輝度ノイズ低減（chromaNR は未適用）",
+        EditEventStatus.IMPLEMENTED_M1,
+        PAYLOAD_SHAPE_SCHEMA_VERSION_1,
     ),
 
     /**
@@ -109,7 +115,8 @@ enum class EditEventKind(
      * センター基準のクロップ。payload 形状 v1:
      * `{"geometry":{"angleDeg","mirrorX","mirrorY","crop":[x0,y0,x1,y1]},"op":...}`
      * （絶対状態スナップショット: undo/redo は payload を前状態へ差し替えて表現）。
-     * 自由角度（傾き補正）・透視・光学補正・自由クロップ（エッジドラッグ）は未実装。
+     * 自由角度（傾き補正）・任意矩形クロップは PR-28b で実装（PR-28b 以降の payload も v1 のまま）。
+     * 透視・光学補正とプレビュー上のエッジドラッグは未実装。
      */
     GEOMETRY(
         "geometry",

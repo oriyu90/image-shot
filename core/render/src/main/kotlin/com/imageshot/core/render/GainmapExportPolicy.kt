@@ -16,12 +16,14 @@ import com.imageshot.core.model.EditNodeSpecs
  *   消すことを [実測] spike が確認済み）。
  *
  * 【分類の基準 = 実際に画素へ適用される変換の集合】
- * 現行パイプラインで**画素に全く適用されない**ノード（ディテール・自由角度回転・レンズ/透視・
+ * 現行パイプラインで**画素に全く適用されない**ノード（ディテール・レンズ/透視・
  * 局所マスク）は画素内容を変えないため判定に含めない（ADR-014 の unappliedNodeWarnings が
  * 欠落を告知する役割を分担）。将来これらのノードが実装された際は、本分類と
  * [RecipeDevelopApplier]/[RecipeGeometry] の適用集合を必ず同時に更新すること
  * （乖離すると warning の真実性が崩れる）。R/G/B チャンネルカーブは PR-28a で画素適用を
  * 開始した（master 直後・sRGB 表示値ドメイン）ため、非中立のときは本分類で不成立条件に昇格済み。
+ * 自由角度回転は PR-28b で画素適用を開始した（リサンプル=非乗算変換）ため、
+ * geometry 非中立の判定（[EditNodeSpecs.isNeutralGeometry]）で不成立になる。
  *
  * ジオメトリ・orientation を pass-through の不成立条件とする理由: gainmap content は本実装では
  * 回転/反転/クロップ/正立化の同時再索引を行わないため、座標割れが HDR 表示の不整合になる

@@ -1,6 +1,7 @@
 package com.imageshot.core.model
 
 import kotlin.math.abs
+import kotlin.math.ceil
 
 /**
  * curve / geometry / HSL イベント（P4 で IMPLEMENTED_M1 に昇格した3種）の
@@ -58,22 +59,64 @@ object EditNodeSpecs {
 
     // ---------------------------------------------------------------- ジオメトリ
 
-    /** M1 で受理する角度（90°刻みのみ。自由角度は未実装）。 */
-    val ALLOWED_ANGLE_DEG: List<Double> = listOf(0.0, 90.0, 180.0, 270.0)
+    /** 角度の同一判定（度）。浮動小数の表現差だけを吸収する（1e-9 度）。 */
+    private const val ANGLE_EPS = 1.0e-9
 
     /** クロップが正味中立（全画面）とみなす最小誤差。 */
     private const val CROP_EPS = 1.0e-9
-    /** angleDeg が 90°刻み集合に一致するか。 */
-    fun isAllowedAngle(angleDeg: Double): Boolean =
-        ALLOWED_ANGLE_DEG.any { abs(angleDeg - it) < CROP_EPS }
+
+    /**
+     * 自由クロップの最小スパン（正規化・PR-28b）。UI の縮小操作と検証の下限を一致させる
+     * （span 0 は [normalizeGeometry] が失敗にするため、それより十分大きい操作可能下限）。
+     */
+    const val CROP_MIN_SPAN = 0.02
+
+    /**
+     * 角度を正準域 [0, 360) へ正規化する（PR-28b・自由角度）。
+     * - 非有限は null（§7.2 INVALID。既定値へ落とさない）。
+     * - 360° の倍数は 0°（-0.0 を含まない 0.0）へ、負値は +360 して同じ回転を表す。
+     * - 90° の倍数は浮動小数誤差を含めてそのまま（例 89.9999999999 → 90.0）には丸めない。
+     *   丸めは [isQuarterTurnAngle] の判定のみで行い、保存値は入力の回転角を保つ。
+     */
+    fun canonicalAngleDeg(angleDeg: Double): Double? {
+        if (!angleDeg.isFinite()) return null
+        var a = angleDeg % 360.0
+        if (a < 0.0) a += 360.0
+        if (a < ANGLE_EPS || a >= 360.0 - ANGLE_EPS) a = 0.0
+        return if (a == -0.0) 0.0 else a
+    }
+
+    /**
+     * 角度が 90°刻み（0/90/180/270）と同一視できるか。
+     * 90°回転はピクセル再索引（無劣化）で適用し、それ以外は任意角リサンプル経路へ送る。
+     */
+    fun isQuarterTurnAngle(angleDeg: Double): Boolean {
+        val c = canonicalAngleDeg(angleDeg) ?: return false
+        val quarters = c / 90.0
+        return abs(quarters - Math.round(quarters).toDouble()) < ANGLE_EPS
+    }
+
+    /**
+     * 90°刻み基準に対する微調整成分（-45..45・PR-28b の角度スライダー正本）。
+     * 例: 0→0 / 12.5→12.5 / 90→0 / 100→10 / 350→-10 / 45→45 / 46→-44。
+     * UI は「基準角（90°の倍数）+ 微調整」で連続操作し、保存は [canonicalAngleDeg] の全角で行う。
+     */
+    fun fineAngleDeg(angleDeg: Double): Double {
+        val c = canonicalAngleDeg(angleDeg) ?: 0.0
+        // 90°刻みの基準は「微調整 ±45° の区間で最も近い下側の基準」。
+        // ちょうど 45°（45/135/225/315）は +45 側へ寄せる（スライダーの連続性を保つ）。
+        val base = 90.0 * ceil(c / 90.0 - 0.5)
+        return c - base
+    }
 
     /**
      * ジオメトリパラメータを正規化する。
-     * - angleDeg は [ALLOWED_ANGLE_DEG] のみ受理（それ以外は null = 失敗。クランプで誤魔化さない）。
+     * - angleDeg は有限なら任意角を受理し、[canonicalAngleDeg] の正準域 [0,360) へ畳み込む
+     *   （PR-28b: 90°刻み限定を解除。非有限のみ null = 失敗）。
      * - cropNorm は 4要素・有限のみ。0..1 にクランプし、x0<x1 / y0<y1（最小差 1e-9。降順/span 0 は null = 失敗）。
      */
     fun normalizeGeometry(g: EditRecipe.GeometryParams): EditRecipe.GeometryParams? {
-        if (!isAllowedAngle(g.angleDeg)) return null
+        val angle = canonicalAngleDeg(g.angleDeg) ?: return null
         val crop = g.cropNorm
         if (crop.size != 4) return null
         val x0 = crop[0].coerceIn(0.0, 1.0)
@@ -82,7 +125,7 @@ object EditNodeSpecs {
         val y1 = crop[3].coerceIn(0.0, 1.0)
         for (v in g.cropNorm) if (!v.isFinite()) return null
         if (x1 - x0 < CROP_EPS || y1 - y0 < CROP_EPS) return null
-        return g.copy(cropNorm = listOf(x0, y0, x1, y1))
+        return g.copy(cropNorm = listOf(x0, y0, x1, y1), angleDeg = angle)
     }
 
     /** ジオメトリが中立（無変換）か。 */
