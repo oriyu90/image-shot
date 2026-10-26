@@ -9,16 +9,20 @@ import com.imageshot.core.model.LEGACY_EVENT_TYPE_PARAM
 import com.imageshot.core.model.EditRecipe
 import com.imageshot.core.model.ErrorCode
 import com.imageshot.core.model.ImageOpResult
+import com.imageshot.core.model.MaskSpecs
 import com.imageshot.core.model.RecipeParameterEdit
 import com.imageshot.core.model.RecipeSchema
 import java.security.MessageDigest
 import java.util.UUID
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.put
 
 /**
@@ -65,6 +69,13 @@ class EditStore(
         val curveChannel: String? = null,
         /** geometry イベントの絶対状態（正規化済み）。スライダー種は null。 */
         val geometry: EditRecipe.GeometryParams? = null,
+        /**
+         * local（局所マスク）イベントの絶対状態（正規化済み・PR-29a/29b）。
+         * 空リストは「全マスク削除」を表す有効な状態であり、他種別イベントは null。
+         */
+        val masks: List<EditRecipe.MaskNode>? = null,
+        /** local イベントの操作対象 maskId（履歴表示用の補助値・適用には無関係）。他種は null。 */
+        val maskId: String? = null,
     )
 
     /** 編集イベントの payload 解放（再生）に関する明示的集計（§7.1 変換ステータスの哲学）。 */
@@ -276,6 +287,45 @@ class EditStore(
         return appendNodeEvent(doc, EditEventKind.GEOMETRY.id, payload)
     }
 
+    /**
+     * 局所マスク（linear/radial/brush）を絶対状態として確定する（PR-29a/29b・29c の UI が使う正本 API）。
+     * payload 形状 v1（[EditEventKind.LOCAL]）:
+     * `{"masks":[{maskId,maskType,version,parameters,adjustments,brushStrokes}...],
+     * maskId?:操作対象ID,"op":...}`。
+     * - [masks] は当該確定後の**全マスク**（相対差分ではない）。空リストは全削除を表し許可される。
+     * - [maskId] は操作対象の補助値（履歴表示用。適用は masks 全量で行う）。
+     * - 正規化できない入力（未知種別/未知パラメータ・adjustments パス/非有限/範囲外、
+     *   maskId 重複、[MaskSpecs.MAX_MASKS] 超過）は FAIL（既定値へ落とさない・部分適用を作らない）。
+     */
+    suspend fun commitMasks(
+        documentId: String,
+        baseRevision: Long,
+        masks: List<EditRecipe.MaskNode>,
+        maskId: String? = null,
+        op: String = RecipeParameterEdit.OP_APPLY,
+    ): ImageOpResult<EditStoreState> {
+        val doc = backend.getDocument(documentId)
+            ?: return ImageOpResult.Failure(ErrorCode.MALFORMED_METADATA, "edit document not found: $documentId")
+        if (doc.currentRevision != baseRevision) {
+            return ImageOpResult.Failure(
+                ErrorCode.MALFORMED_METADATA,
+                "stale baseRevision=$baseRevision current=${doc.currentRevision}",
+            )
+        }
+        val normalized = MaskSpecs.normalizeAll(masks)
+            ?: return ImageOpResult.Failure(
+                ErrorCode.MALFORMED_METADATA,
+                "invalid masks (unknown type/key, non-finite or out-of-range value, duplicate maskId, " +
+                    "or more than ${MaskSpecs.MAX_MASKS} masks)",
+            )
+        val payload = buildJsonObject {
+            put("op", op)
+            put("masks", buildJsonArray { normalized.forEach { add(maskNodeJson(it)) } })
+            if (maskId != null) put("maskId", maskId)
+        }
+        return appendNodeEvent(doc, EditEventKind.LOCAL.id, payload)
+    }
+
     /** Undo: 末尾イベントの影響を取り消す新規イベント（op=undo）を追記。削除・書換はしない。 */
     suspend fun undo(documentId: String): ImageOpResult<UndoOutcome> {
         val doc = backend.getDocument(documentId)
@@ -284,22 +334,30 @@ class EditStore(
         val last = state.history.lastOrNull() ?: return ImageOpResult.Success(UndoOutcome.Noop)
         val lastOp = last.op
         if (lastOp == RecipeParameterEdit.OP_UNDO) return ImageOpResult.Success(UndoOutcome.Noop)
-        // ノード（curve/geometry）イベントは絶対状態スナップショットで undo する（本Event前の状態へ）。
-        if (last.eventType == EditEventKind.CURVE.id || last.eventType == EditEventKind.GEOMETRY.id) {
+        // ノード（curve/geometry/local）イベントは絶対状態スナップショットで undo する（本Event前の状態へ）。
+        if (last.eventType == EditEventKind.CURVE.id || last.eventType == EditEventKind.GEOMETRY.id ||
+            last.eventType == EditEventKind.LOCAL.id
+        ) {
             val previous = previousNodeState(state.history, last.eventType, last.revisionNo, effectiveOnly = false)
-            val committed = if (last.eventType == EditEventKind.CURVE.id) {
-                commitCurve(
+            val committed = when (last.eventType) {
+                EditEventKind.CURVE.id -> commitCurve(
                     documentId,
                     doc.currentRevision,
                     previous?.curve ?: EditRecipe.Curve(), // フォールバック=中立 rgb + 未編集チャンネル。
                     previous?.curveChannel ?: last.curveChannel, // 履歴表示用の補助値（適用には無関係）。
                     RecipeParameterEdit.OP_UNDO,
                 )
-            } else {
-                commitGeometry(
+                EditEventKind.GEOMETRY.id -> commitGeometry(
                     documentId,
                     doc.currentRevision,
                     previous?.geometry ?: EditRecipe.GeometryParams(),
+                    RecipeParameterEdit.OP_UNDO,
+                )
+                else -> commitMasks(
+                    documentId,
+                    doc.currentRevision,
+                    previous?.masks ?: emptyList(), // フォールバック=マスク無し（中立）。
+                    previous?.maskId ?: last.maskId,
                     RecipeParameterEdit.OP_UNDO,
                 )
             }
@@ -322,22 +380,30 @@ class EditStore(
         val state = loadInternal(documentId) ?: return successStateFailure(documentId)
         val last = state.history.lastOrNull() ?: return ImageOpResult.Success(UndoOutcome.Noop)
         if (last.op != RecipeParameterEdit.OP_UNDO) return ImageOpResult.Success(UndoOutcome.Noop)
-        // ノード（curve/geometry）の redo: 取り消し直前の状態（末尾 undo の直前ノード状態）へ戻す。
-        if (last.eventType == EditEventKind.CURVE.id || last.eventType == EditEventKind.GEOMETRY.id) {
+        // ノード（curve/geometry/local）の redo: 取り消し直前の状態（末尾 undo の直前ノード状態）へ戻す。
+        if (last.eventType == EditEventKind.CURVE.id || last.eventType == EditEventKind.GEOMETRY.id ||
+            last.eventType == EditEventKind.LOCAL.id
+        ) {
             val redone = previousNodeState(state.history, last.eventType, last.revisionNo, effectiveOnly = true)
-            val committed = if (last.eventType == EditEventKind.CURVE.id) {
-                commitCurve(
+            val committed = when (last.eventType) {
+                EditEventKind.CURVE.id -> commitCurve(
                     documentId,
                     doc.currentRevision,
                     redone?.curve ?: EditRecipe.Curve(), // フォールバック=中立 rgb + 未編集チャンネル。
                     redone?.curveChannel ?: last.curveChannel, // 履歴表示用の補助値（適用には無関係）。
                     RecipeParameterEdit.OP_REDO,
                 )
-            } else {
-                commitGeometry(
+                EditEventKind.GEOMETRY.id -> commitGeometry(
                     documentId,
                     doc.currentRevision,
                     redone?.geometry ?: EditRecipe.GeometryParams(),
+                    RecipeParameterEdit.OP_REDO,
+                )
+                else -> commitMasks(
+                    documentId,
+                    doc.currentRevision,
+                    redone?.masks ?: emptyList(), // フォールバック=マスク無し（中立）。
+                    redone?.maskId ?: last.maskId,
                     RecipeParameterEdit.OP_REDO,
                 )
             }
@@ -391,6 +457,8 @@ class EditStore(
             if (item.revisionNo >= beforeRevisionNo) continue
             if (item.eventType != eventType) continue
             if (effectiveOnly && item.op == RecipeParameterEdit.OP_UNDO) continue
+            // 解釈できなかった local 行（payload 不正 = 履歴では masks が null）は状態を持たないため飛ばす。
+            if (eventType == EditEventKind.LOCAL.id && item.masks == null) continue
             return item
         }
         return null
@@ -551,6 +619,18 @@ class EditStore(
                             else -> Unit
                         }
                     }
+                    EditEventKind.LOCAL.id -> {
+                        val masks = parseMasksPayload(payload)
+                        when {
+                            masks == null -> preservedOnly++
+                            rev.revisionNo > baseRevision -> {
+                                // マスク全量を絶対状態として適用（空リスト = 全削除も有効な状態）。
+                                recipe = recipe.copy(masks = masks)
+                                applied++
+                            }
+                            else -> Unit
+                        }
+                    }
                     // ---- スライダー種（tone/wb/color/hsl）----
                     else -> {
                         val id = resolveAdjustment(rev.eventType, payload)
@@ -633,6 +713,9 @@ class EditStore(
         val op = (payload["op"] as? JsonPrimitive)?.content
         val curve = if (rev.eventType == EditEventKind.CURVE.id) parseCurvePayload(payload) else null
         val geometry = if (rev.eventType == EditEventKind.GEOMETRY.id) parseGeometryPayload(payload) else null
+        val isLocal = rev.eventType == EditEventKind.LOCAL.id
+        val masks = if (isLocal) parseMasksPayload(payload) else null
+        val maskTarget = if (isLocal) (payload["maskId"] as? JsonPrimitive)?.content else null
         return EditStoreHistoryItem(
             revisionNo = rev.revisionNo,
             eventType = rev.eventType,
@@ -643,6 +726,8 @@ class EditStore(
             curve = curve?.curve,
             curveChannel = curve?.editedChannel,
             geometry = geometry,
+            masks = masks,
+            maskId = maskTarget,
         )
     }
 
@@ -711,6 +796,92 @@ class EditStore(
                 mirrorY = mirrorY,
             ),
         )
+    }
+
+    /**
+     * local payload v1 → 正規化済みマスク全量（空リストは有効な「全削除」状態）。
+     * 形状不一致・正規化不能・maskId 重複・上限超過は null（PRESERVED_ONLY・部分適用を作らない）。
+     */
+    private fun parseMasksPayload(payload: JsonObject): List<EditRecipe.MaskNode>? {
+        val masksNode = payload["masks"] as? JsonArray ?: return null
+        val masks = ArrayList<EditRecipe.MaskNode>(masksNode.size)
+        for (element in masksNode) {
+            masks += parseMaskNode(element) ?: return null
+        }
+        return MaskSpecs.normalizeAll(masks)
+    }
+
+    /** payload の1マスク → 正規化済み MaskNode（version は省略時 1・未知/不正は null）。 */
+    private fun parseMaskNode(element: JsonElement): EditRecipe.MaskNode? {
+        val obj = element as? JsonObject ?: return null
+        val maskId = (obj["maskId"] as? JsonPrimitive)?.content ?: return null
+        val maskType = (obj["maskType"] as? JsonPrimitive)?.content ?: return null
+        val version = (obj["version"] as? JsonPrimitive)?.intOrNull ?: 1
+        val parameters = parseDoubleMap(obj["parameters"]) ?: return null
+        val adjustments = parseDoubleMap(obj["adjustments"]) ?: return null
+        val strokes = parseBrushStrokes(obj["brushStrokes"]) ?: return null
+        return MaskSpecs.normalize(
+            EditRecipe.MaskNode(
+                maskId = maskId,
+                maskType = maskType,
+                version = version,
+                parameters = parameters,
+                adjustments = adjustments,
+                brushStrokes = strokes,
+            ),
+        )
+    }
+
+    /** 数値マップ（無キーは空・非オブジェクト/非数値は null）。 */
+    private fun parseDoubleMap(node: JsonElement?): Map<String, Double>? {
+        if (node == null) return emptyMap()
+        val obj = node as? JsonObject ?: return null
+        val out = LinkedHashMap<String, Double>(obj.size)
+        for ((key, value) in obj) {
+            val number = (value as? JsonPrimitive)?.doubleOrNull ?: return null
+            out[key] = number
+        }
+        return out
+    }
+
+    /** ブラシストローク列（無キーは空・形状不一致は null・opacity 省略時 1.0）。 */
+    private fun parseBrushStrokes(node: JsonElement?): List<EditRecipe.BrushStroke>? {
+        if (node == null) return emptyList()
+        val array = node as? JsonArray ?: return null
+        val out = ArrayList<EditRecipe.BrushStroke>(array.size)
+        for (element in array) {
+            val obj = element as? JsonObject ?: return null
+            val x = (obj["x"] as? JsonPrimitive)?.doubleOrNull ?: return null
+            val y = (obj["y"] as? JsonPrimitive)?.doubleOrNull ?: return null
+            val radius = (obj["radius"] as? JsonPrimitive)?.doubleOrNull ?: return null
+            val opacity = (obj["opacity"] as? JsonPrimitive)?.doubleOrNull ?: 1.0
+            out += EditRecipe.BrushStroke(x = x, y = y, radius = radius, opacity = opacity)
+        }
+        return out
+    }
+
+    /** 正規化済みマスク → payload の `masks` 要素（commitMasks 用の唯一の書込み整形）。 */
+    private fun maskNodeJson(mask: EditRecipe.MaskNode): JsonObject = buildJsonObject {
+        put("maskId", mask.maskId)
+        put("maskType", mask.maskType)
+        put("version", mask.version)
+        put("parameters", doubleMapJson(mask.parameters))
+        put("adjustments", doubleMapJson(mask.adjustments))
+        put("brushStrokes", buildJsonArray {
+            mask.brushStrokes.forEach { stroke ->
+                add(buildJsonObject {
+                    put("x", stroke.x)
+                    put("y", stroke.y)
+                    put("radius", stroke.radius)
+                    put("opacity", stroke.opacity)
+                })
+            }
+        })
+    }
+
+    /** 正準順序を保った数値マップ → JSON オブジェクト。 */
+    private fun doubleMapJson(map: Map<String, Double>): JsonObject = buildJsonObject {
+        map.forEach { (key, value) -> put(key, value) }
     }
 
     /** 正規化済み制御点 → payload の `rgb` 配列（commitCurve 用の唯一の書込み整形）。 */

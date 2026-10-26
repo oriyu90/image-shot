@@ -11,4 +11,6 @@ kotlin {
 dependencies {
     implementation(libs.kotlinx.serialization.json)
     testImplementation(libs.junit)
+    // マスク正規化テスト（MaskSpecsTest）の assertNull/assertNotNull 戻り値利用のため。
+    testImplementation(kotlin("test"))
 }

@@ -13,8 +13,10 @@ import org.junit.Test
  *   なく format=JPEG なら PASS_THROUGH。
  * - 非乗算 LUT（コントラスト等）・master カーブ非中立・R/G/B チャンネルカーブ非中立
  *   （PR-28a で画素適用が開始）・彩度/HSL・実行ジオメトリ・非JPEG 出力 → STRIP_TO_SDR。
- * - 現行で画素に適用されないノード（detail・自由角度・レンズ/透視・局所マスク）は
- *   判定に含めない（将来の適用化時に同期更新必要・KDoc 参照）。
+ * - 現行で画素に適用されないノード（detail・レンズ/透視）は判定に含めない
+ *   （将来の適用化時に同期更新必要・KDoc 参照）。
+ * - 局所マスクは PR-29b で画素適用を開始した（adjustments を持つマスクが1件でもあれば
+ *   STRIP_TO_SDR。adjustments が空のマスクは画素不変なので pass-through を維持）。
  *
  * 【明示】gainmap 自体の保全/剝離挙動は androidTest（実機）の担当。本テストは分類器のみ。
  */
@@ -125,9 +127,10 @@ class GainmapExportPolicyTest {
     }
 
     @Test
-    fun `channel curves detail and masks are not applied and do not block`() {
+    fun `channel curves detail and adjustment-free masks do not block`() {
         // チャンネルの「非空だが恒等（中立 2 点）」は画素不変なので pass-through を維持する。
-        // （detail・マスクは画素不変ノードであり判定に含めない — KDoc 契約は不変。）
+        // detail は未適用（画素不変）→ 判定に含めない。
+        // PR-29b: adjustments が空のマスクも画素不変（out == base）なので pass-through を維持する。
         val channels = recipe(
             develop = EditRecipe.DevelopParams(
                 curve = EditRecipe.Curve(
@@ -137,10 +140,42 @@ class GainmapExportPolicyTest {
                 detail = EditRecipe.Detail(sharpen = 0.5),
             ),
         )
-        val masks = recipe(masks = listOf(EditRecipe.MaskNode(maskId = "m1", maskType = "linear")))
-        for (r in listOf(channels, masks)) {
+        val noAdjustmentMask = recipe(
+            masks = listOf(
+                EditRecipe.MaskNode(
+                    maskId = "m1",
+                    maskType = "linear",
+                    parameters = mapOf(
+                        "x0" to 0.2, "y0" to 0.2, "x1" to 0.8, "y1" to 0.8, "feather" to 0.6,
+                    ),
+                ),
+            ),
+        )
+        for (r in listOf(channels, noAdjustmentMask)) {
             assertEquals(GainmapExportPolicy.Mode.PASS_THROUGH, GainmapExportPolicy.classify(r, "JPEG"))
         }
+    }
+
+    @Test
+    fun `masks with adjustments block pass-through`() {
+        // PR-29b: マスク毎 adjustments は重み w でブレンドされる（非乗算）→ gainmap 同時編集は
+        // 未実装のため SDR-only。8bit ブレンド後の SDR 画素と未修正 gainmap の整合は stage-2。
+        val mask = EditRecipe.MaskNode(
+            maskId = "m1",
+            maskType = "linear",
+            parameters = mapOf("x0" to 0.2, "y0" to 0.2, "x1" to 0.8, "y1" to 0.8, "feather" to 0.6),
+            adjustments = mapOf("develop.tone.exposureEv" to 0.7),
+        )
+        assertEquals(
+            GainmapExportPolicy.Mode.STRIP_TO_SDR,
+            GainmapExportPolicy.classify(recipe(masks = listOf(mask)), "JPEG"),
+        )
+        // 正規化できないマスクは適用されないが、分類は安全側で不成立。
+        val invalid = EditRecipe.MaskNode(maskId = "bad", maskType = "vignette")
+        assertEquals(
+            GainmapExportPolicy.Mode.STRIP_TO_SDR,
+            GainmapExportPolicy.classify(recipe(masks = listOf(invalid)), "JPEG"),
+        )
     }
 
     @Test

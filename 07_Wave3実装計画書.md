@@ -348,6 +348,76 @@ export 側は issueNotes に記録）。UI 警告の全面結線は ADR-014 の�
 - **リスク**: CPU での mask blending は重く、NFR-04 と両立する設計を要る（48MP ではなく preview 尺での計算分割）。失敗時契約: mask 計算負荷からの防御として「リージョン数上限+重み上限（値は実測後に台帳化）」を明示。
 - **工数**: XL（3分割推奨）/ **依存**: PR-28（補正型・per-channel 共通の LUT 拡張を先に）。
 
+### 13.1 PR-29a/29b 実施結果（✅ 2026-10-27・**JVM 検証のみ／実機未検証**）
+
+**29c（overlay UI）は別担当のため未実施**。本 PR は「payload + JVM 純関数（29a）」と
+「EditStore 永続化 + renderer 統合 + 重みキャッシュ（29b）」までで、`feature/editor` の UI・文言は
+一切変更していない（29c 用の public API のみ用意）。
+
+**設計（確定どおり実装・逸脱は §末尾）**:
+
+- `core:model`（29a）: `EditRecipe.MaskNode` に `brushStrokes` を追加（`BrushStroke(x,y,radius,opacity)`）。
+  default 付きのフィールド追加のみのため、既存 recipe/payload JSON はそのまま読め、
+  **Room schema v1 不変（migration なし）**。`MaskSpecs`（新規・純 Kotlin）が
+  種別 `linear|radial|brush`・上限 8・座標は正規化 [0,1]・パラメータ keys と既定値
+  （linear feather 1.0 / radial feather 0.5・angleDeg 0 / brush feather 0.3）・
+  adjustments 許可 10 パス（**レシピドメイン値**: 露出 -5..5・トーン系 -1..1・温度 2000..12000・
+  tint/彩度 -1..1）・`normalize`/`normalizeAll`/`defaultParams`/`newMaskId` の正本。
+  未知キー・非有限・範囲外・linear の A==B・maskId 重複・上限超過は **null**
+  （EditStore 側で FAIL、再生側で PRESERVED_ONLY）。
+- `core:render`（29a/29b）: `MaskWeight`（画素中心 `(x+0.5)/w`・linear=smoothstep ランプ /
+  radial=楕円の逆回転 + `1-smoothstep(1-f,1,d)`（「楕円を時計回りに angleDeg 回した」順写像の逆）/
+  brush=画素距離を `min(w,h)` で正規化し全 stroke の max）。`RecipeMaskApplier` は masks 順の
+  **逐次合成**（`out = base + (adj − base)·w`・8bit 四捨五入・0..255 クランプ・α 不変・
+  w<=0 スキップ・w>=1 は adj）で、各マスクの adjustments を develop から抽出した共有画素適用器
+  `DevelopStage`（演算順序を1つも変えない抽出）で per-pixel 適用する。
+  `MaskWeightCache` は LRU（上限 24MB・key=`maskId|version|paramsHash|w|h`・synchronized）で、
+  画素数 <=4MP は全面キャッシュ、>4MP は **256 行の帯処理**へ回す（結果は同一）。
+- 適用順は **geometry → develop → masks → detail → resize**。preview
+  （`SimpleBitmapPhotoRenderer.applyDevelop`）と export（`ExportRenderer.applyDevelop`）の
+  両方の develop 直後・detail 直前に挿入。
+- `core:database`: `EditEventKind.LOCAL` を IMPLEMENTED_M1・payload v1 へ昇格。
+  `commitMasks(documentId, baseRevision, masks, maskId?)`（楽観排他・正規化・上限 8・
+  maskId 重複拒否・**空リスト = 全削除**を許可）。undo/redo は curve/geometry と同じ
+  「ノード絶対状態」復元方式（履歴項目 `masks`/`maskId` を前状態へ差し替え）。再生は LOCAL 行の
+  masks 全量を適用し、スナップショット再生（`recipeJson` に masks を含む）でも同じ状態になる。
+- 警告の同期: `unappliedNodeWarnings` の「local masks not applied」を撤去し、
+  **正規化できないマスクがある場合のみ**警告（vignette 警告は残置）。`GainmapExportPolicy` は
+  同ファイル KDoc の「適用集合を同時更新」義務に従い、adjustments を持つマスクあり →
+  PASS_THROUGH 不成立（SDR-only）へ更新。`RENDER_WARNINGS` の未実装列挙からも local masks を除去。
+
+**検証（JVM・この環境）**:
+
+| 検証 | 結果 |
+|---|---|
+| `./gradlew test` | **331 件 / 失敗 0**（PR-29 追加 **54** 件: `MaskSpecsTest` 12・`MaskWeightTest` 17・`RecipeMaskApplierTest` 14・`EditStoreTest` +9・警告/分類の既存テスト更新 +2） |
+| lint（`:feature:editor:lintDebug` / `:feature:export:lintDebug` / `:feature:library:lintDebug`） | error 0 |
+| `:app:assembleDebug` | 緑 |
+| `tools/ui_strings_check.py` | 違反 0 |
+| golden ΔE（8 ケース化） | **未実行（実機/エミュレータ未使用）**。既存 6 ケースの値は不変・ケース 2 件を追加 |
+| kill injection / preview=export 実測 / NFR-04 | **未実施（数値なし）** |
+
+**未検証・残置（過大報告しない）**:
+
+- golden ΔE 8 ケース（mask-linear / mask-radial 追加分）・preview=export 同値・kill injection
+  100 回・NFR-04（マスク合成の実測時間）は **実機未検証**。キャッシュ 24MB・4MP 閾値・
+  帯 256 行は**設計値**で実測校正前。
+- 48MP 級（帯処理経路）の実性能・メモリは未測定（fixture 未使用）。JVM では帯行数を縮めた
+  等価性のみ固定（キャッシュ経路と画素完全一致）。
+- マスク UI（29c）未実装のため、ユーザー操作からマスクを生成する経路は未接続。
+- マスク内で適用できるのは tone/WB/color のみ（curve/detail/HSL は `MaskSpecs` がパス拒否）。
+- マスク重みは 8bit sRGB ドメインのブレンド（ADR-005 の float/tile 本命パイプラインではない）。
+
+**設計からの逸脱・追加判断（3 点）**:
+
+1. `commitMasks` に `baseRevision` を追加（仕様案の `commitMasks(documentId, masks, maskId?)` は
+   楽観排他を持たず NFR-06 と不整合になるため、curve/geometry と同じ契約へ揃えた）。
+2. brush ストローク数の防御的上限 `MAX_BRUSH_STROKES=256`・maskId 長 128 を追加（仕様は
+   「リージョン数上限」のみ明示。CPU 合成の防御で固定値・実測前）。
+3. `GainmapExportPolicy`（gainmap pass-through 判定）と `RENDER_WARNINGS`・
+   `RecipeDevelopApplierTest`/`GainmapExportPolicyTest` の既存 2 テストを同期更新
+   （マスクが画素へ作用するようになったため。KDoc が「適用集合の同時更新」を要求）。
+
 ## 14. PR-30: G2 availability・G3 inset・F3 adaptive
 
 - **既存計画継承**: 06 旧 PR-11/12/13 の再編成。

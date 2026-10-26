@@ -2,6 +2,7 @@ package com.imageshot.core.render
 
 import com.imageshot.core.model.EditRecipe
 import com.imageshot.core.model.EditNodeSpecs
+import com.imageshot.core.model.MaskSpecs
 
 /**
  * 書き出し時の gainmap (Ultra HDR / ISO 21496-1) 取扱い policy 分岐（ADR-026 stage-1）。
@@ -16,14 +17,16 @@ import com.imageshot.core.model.EditNodeSpecs
  *   消すことを [実測] spike が確認済み）。
  *
  * 【分類の基準 = 実際に画素へ適用される変換の集合】
- * 現行パイプラインで**画素に全く適用されない**ノード（ディテール・レンズ/透視・
- * 局所マスク）は画素内容を変えないため判定に含めない（ADR-014 の unappliedNodeWarnings が
- * 欠落を告知する役割を分担）。将来これらのノードが実装された際は、本分類と
+ * 現行パイプラインで**画素に全く適用されない**ノード（レンズ/透視補正）は画素内容を変えない
+ * ため判定に含めない（ADR-014 の unappliedNodeWarnings が欠落を告知する役割を分担）。
+ * 将来これらのノードが実装された際は、本分類と
  * [RecipeDevelopApplier]/[RecipeGeometry] の適用集合を必ず同時に更新すること
  * （乖離すると warning の真実性が崩れる）。R/G/B チャンネルカーブは PR-28a で画素適用を
  * 開始した（master 直後・sRGB 表示値ドメイン）ため、非中立のときは本分類で不成立条件に昇格済み。
  * 自由角度回転は PR-28b で画素適用を開始した（リサンプル=非乗算変換）ため、
  * geometry 非中立の判定（[EditNodeSpecs.isNeutralGeometry]）で不成立になる。
+ * 局所マスクは PR-29b で画素適用を開始した（[RecipeMaskApplier]: マスク毎 adjustments を
+ * 重み w でブレンド = 非乗算）。adjustments を持つマスクが 1 件でもあれば不成立。
  *
  * ジオメトリ・orientation を pass-through の不成立条件とする理由: gainmap content は本実装では
  * 回転/反転/クロップ/正立化の同時再索引を行わないため、座標割れが HDR 表示の不整合になる
@@ -80,7 +83,9 @@ object GainmapExportPolicy {
      * PR-28a で画素適用が開始された）・彩度/自然な彩度・HSL（非中立・[RecipeHsl.isNeutral] と
      * 同一判定）・実行されるジオメトリ変換（90°回転/反転/クロップ・
      * [EditNodeSpecs.isNeutralGeometry] と同一判定・不正値は安全側不成立）。
-     * 判定しない（画素不変のため）: ディテール・レンズ/透視補正・局所マスク。
+     * 局所マスク（PR-29b で画素適用を開始）: adjustments を持つマスクが1件でもあれば不成立
+     * （正規化できないマスク＝[MaskSpecs.normalizeAll] が null の場合も安全側で不成立）。
+     * 判定しない（画素不変のため）: ディテール・レンズ/透視補正。
      * decode 段の orientation 正立化は [classify] の orientationTransformed 引数で不成立化する。
      */
     private fun isMultiplicativeOnlyPixelOps(recipe: EditRecipe): Boolean {
@@ -107,6 +112,13 @@ object GainmapExportPolicy {
         if (c.vibrance != 0.0 || c.saturation != 0.0) return false
         // HSL は実適用ゲートと同一判定（RecipeHsl.isNeutral）を使う（非中立なら不成立）。
         if (!RecipeHsl.isNeutral(c.hsl)) return false
+        // 局所マスク（PR-29b で画素適用を開始）: マスク毎 adjustments は重み w でブレンドされる
+        // （非乗算変換）。1件でも adjustments を持てば不成立。正規化できないマスクは適用されないが、
+        // 分類は安全側（未実測領域を通さない ADR-026 原則）に倒して不成立とする。
+        if (recipe.masks.isNotEmpty()) {
+            val masks = MaskSpecs.normalizeAll(recipe.masks) ?: return false
+            if (masks.any { it.adjustments.isNotEmpty() }) return false
+        }
         // ジオメトリ: 実行される変換（許可角度回転・反転・クロップ）はいずれも不成立条件。
         // 正規化成功かつ中立（RecipeGeometry.applyIfNeeded が同一 plane 参照で短絡）→ 通す。
         // 正規化失敗（不正角度・不正クロップ等）は applier に未正規化のまま渡る

@@ -44,6 +44,9 @@ import org.junit.Test
  * （RecipeDevelopApplier 共有）であることの検出器として機能する（隠れた片側劣化の発見）。
  * PR-28a: R/G/B チャンネルカーブの非中立ケース（perChannelCurveRecipe）を追加
  * （既存しきい値を共用・D1 の golden ΔE 追加）。
+ * PR-29a/29b: 局所マスク（linear / radial）の非中立ケースを 2 件追加
+ * （masks は geometry → develop → masks → detail の順に preview/export 双方で同一関数が適用する）。
+ * report へは additive key `recipe.masks`（件数）と `recipe.maskTypes` を追加（既存キー不変）。
  *
  * 測定成果物: targetContext（= com.imageshot.benchmark）の filesDir へ
  * /data/data/com.imageshot.benchmark/files/golden_dE_report.json（全ケースの実測値+パラメータ）。
@@ -131,6 +134,32 @@ class GoldenPreviewExportDeltaETest {
         runGoldenCase(
             case = "per-channel-curve(r-lift,g-empty,b-dip)-non-neutral",
             recipe = perChannelCurveRecipe(),
+            meanMax = NONNEUTRAL_MEAN_MAX,
+            p95Max = NONNEUTRAL_P95_MAX,
+            provisional = false,
+        )
+    }
+
+    @Test
+    fun goldenDeltaE_linearMask_nonNeutral() {
+        // PR-29a/29b D3-1: linear マスク A(0.2,0.2)→B(0.8,0.8)・feather 0.6・露出 +0.7EV・
+        // コントラスト +0.2。マスクは develop 後・detail 前に preview/export 同一関数で合成される。
+        runGoldenCase(
+            case = "mask-linear(0.2,0.2->0.8,0.8,feather0.6,exposure0.7,contrast0.2)",
+            recipe = linearMaskRecipe(),
+            meanMax = NONNEUTRAL_MEAN_MAX,
+            p95Max = NONNEUTRAL_P95_MAX,
+            provisional = false,
+        )
+    }
+
+    @Test
+    fun goldenDeltaE_radialMask_nonNeutral() {
+        // PR-29a/29b D3-2: radial マスク（中心 0.5/0.5・rx0.3/ry0.2・angle30・feather0.4）に
+        // 彩度 -0.5 と 6500K。回転楕円の重みと per-mask develop の同値契約を計測する。
+        runGoldenCase(
+            case = "mask-radial(cx0.5,cy0.5,rx0.3,ry0.2,angle30,feather0.4,saturation-0.5,temp6500)",
+            recipe = radialMaskRecipe(),
             meanMax = NONNEUTRAL_MEAN_MAX,
             p95Max = NONNEUTRAL_P95_MAX,
             provisional = false,
@@ -481,6 +510,59 @@ class GoldenPreviewExportDeltaETest {
         ),
     )
 
+    /**
+     * PR-29a D3-1: linear マスクの golden recipe。
+     * A(0.2,0.2)→B(0.8,0.8)・feather 0.6・調整は露出 +0.7EV / コントラスト +0.2（レシピドメイン値）。
+     */
+    private fun linearMaskRecipe(): EditRecipe = EditRecipe(
+        documentId = "golden-deltae",
+        source = EditRecipe.RecipeSource(assetId = "asset-1", fingerprint = "fp-golden"),
+        masks = listOf(
+            EditRecipe.MaskNode(
+                maskId = "golden-linear",
+                maskType = "linear",
+                parameters = mapOf(
+                    "x0" to 0.2,
+                    "y0" to 0.2,
+                    "x1" to 0.8,
+                    "y1" to 0.8,
+                    "feather" to 0.6,
+                ),
+                adjustments = mapOf(
+                    "develop.tone.exposureEv" to 0.7,
+                    "develop.tone.contrast" to 0.2,
+                ),
+            ),
+        ),
+    )
+
+    /**
+     * PR-29a D3-2: radial マスクの golden recipe。
+     * 中心 (0.5,0.5)・rx 0.3 / ry 0.2・時計回り 30°・feather 0.4・調整は彩度 -0.5 と 6500K。
+     */
+    private fun radialMaskRecipe(): EditRecipe = EditRecipe(
+        documentId = "golden-deltae",
+        source = EditRecipe.RecipeSource(assetId = "asset-1", fingerprint = "fp-golden"),
+        masks = listOf(
+            EditRecipe.MaskNode(
+                maskId = "golden-radial",
+                maskType = "radial",
+                parameters = mapOf(
+                    "cx" to 0.5,
+                    "cy" to 0.5,
+                    "rx" to 0.3,
+                    "ry" to 0.2,
+                    "angleDeg" to 30.0,
+                    "feather" to 0.4,
+                ),
+                adjustments = mapOf(
+                    "develop.color.saturation" to -0.5,
+                    "develop.whiteBalance.tempKelvin" to 6500.0,
+                ),
+            ),
+        ),
+    )
+
     // ------------------------------------------------------------------ 成果物 JSON
 
     @Synchronized
@@ -552,6 +634,12 @@ class GoldenPreviewExportDeltaETest {
                 )
                 .put("detailSharpen", recipe.develop.detail.sharpen)
                 .put("detailLumaNoise", recipe.develop.detail.lumaNoise)
+                // PR-29a/29b: 局所マスクの件数と種別（追加キーのみ・既存キー不変）。
+                .put("masks", recipe.masks.size)
+                .put(
+                    "maskTypes",
+                    JSONArray().apply { recipe.masks.forEach { put(it.maskType) } },
+                )
         )
         .put(
             "preview",

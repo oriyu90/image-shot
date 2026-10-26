@@ -294,6 +294,9 @@ class ExportBitmapRenderer(context: Context) {
         )
         pixels = plane.pixels
         RecipeDevelopApplier.applyToPixels(pixels, recipe.develop)
+        // PR-29b: 局所マスク（geometry → develop → masks → detail → resize の正本順序）。
+        // preview と同一関数（重みは書き出し寸法で再計算・>4MP は帯処理）。
+        RecipeMaskApplier.applyToPixels(pixels, plane.width, plane.height, recipe.masks)
         // PR-28c: 空間 stage（develop 後・resize 前・preview と同一関数/同一順序）。
         val detail = RecipeDetailApplier.applyToPixels(pixels, plane.width, plane.height, recipe.develop.detail)
         val out = Bitmap.createBitmap(plane.width, plane.height, Bitmap.Config.ARGB_8888)

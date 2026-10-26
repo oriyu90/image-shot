@@ -96,15 +96,39 @@ data class EditRecipe(
         val perspective: Map<String, Double>? = null,
     )
 
+    /**
+     * 局所補正ノード（PR-29a）。正規化・検証の正本は [MaskSpecs.normalize]。
+     *
+     * - 座標系は正規化 [0,1]（crop ではなく常に全画面基準。geometry 適用後の画像座標を
+     *   正規化した値として解釈する — 適用順は geometry → develop → masks → detail）。
+     * - [parameters] / [adjustments] は正規化済みの値のみを保持する（キー順序も正準）。
+     * - 追加フィールドは default 付きのため、PR-29a 以前の recipe/payload JSON はそのまま
+     *   読める（serialization 後方互換・Room schema 変更なし）。
+     */
     @kotlinx.serialization.Serializable
     data class MaskNode(
         /** マスク合成は再現可能なバージョン付きノード（§5.3）。 */
         val maskId: String,
+        /** "linear" | "radial" | "brush"（[MaskSpecs.MASK_TYPES]）。 */
         val maskType: String,
         val version: Int = 1,
         /** パラメータは正規化・検証済みの値のみ保存する。 */
         val parameters: Map<String, Double> = emptyMap(),
         val adjustments: Map<String, Double> = emptyMap(),
+        /** brush のストローク列（x/y/radius は正規化 [0,1]・radius は (0,0.5]・PR-29a）。 */
+        val brushStrokes: List<BrushStroke> = emptyList(),
+    )
+
+    /**
+     * ブラシの1ストローク（PR-29a）。
+     * x/y/radius は正規化座標、[opacity] は 0..1。距離は画素距離を min(w,h) で正規化して評価する。
+     */
+    @kotlinx.serialization.Serializable
+    data class BrushStroke(
+        val x: Double,
+        val y: Double,
+        val radius: Double,
+        val opacity: Double = 1.0,
     )
 
     companion object {

@@ -2,6 +2,7 @@ package com.imageshot.core.render
 
 import com.imageshot.core.model.EditNodeSpecs
 import com.imageshot.core.model.EditRecipe
+import com.imageshot.core.model.MaskSpecs
 
 /**
  * develop（現像調整）適用の共有実装（02_実装定義書.md §3
@@ -33,16 +34,30 @@ object RecipeDevelopApplier {
      * アルファは不変。非有限値は各ノード側で中立へ落とす（§7.1）。
      */
     fun applyToPixels(pixels: IntArray, develop: EditRecipe.DevelopParams) {
-        val lut = RecipeToneCurve.buildChannelLuts(develop)
-        val mixer = RecipeToneCurve.ColorMixer(
-            develop.color.vibrance,
-            develop.color.saturation,
-        )
-        val hslActive = !RecipeHsl.isNeutral(develop.color.hsl)
-        val hslMixer = if (hslActive) RecipeHsl.HslMixer(develop.color.hsl) else null
-        val mixBuf = FloatArray(3)
+        val stage = DevelopStage(develop)
         for (i in pixels.indices) {
-            val p = pixels[i]
+            pixels[i] = stage.apply(pixels[i])
+        }
+    }
+
+    /**
+     * develop 1段（LUT + 彩度/自然な彩度 + HSL）の画素適用器。
+     *
+     * [applyToPixels] と局所マスク合成（[RecipeMaskApplier]）が同一の演算順序・同一式を共有する
+     * ための抽出（02 §3.3「プレビューと書き出しで同じノード実装」・PR-29b）。
+     * 式・演算順序は抽出前と完全に同一（既存 golden ケースの bit 一致を維持する）。
+     * インスタンスは 1 スレッド内で使うこと（[mixBuf] を再利用する）。
+     */
+    internal class DevelopStage(develop: EditRecipe.DevelopParams) {
+        private val lut: IntArray = RecipeToneCurve.buildChannelLuts(develop)
+        private val mixer: RecipeToneCurve.ColorMixer =
+            RecipeToneCurve.ColorMixer(develop.color.vibrance, develop.color.saturation)
+        private val hslMixer: RecipeHsl.HslMixer? =
+            if (!RecipeHsl.isNeutral(develop.color.hsl)) RecipeHsl.HslMixer(develop.color.hsl) else null
+        private val mixBuf = FloatArray(3)
+
+        /** 1画素を変換した ARGB を返す（アルファは入力のまま）。 */
+        fun apply(p: Int): Int {
             var r = lut[(p ushr 16) and 0xFF] / 255.0f
             var g = lut[256 + ((p ushr 8) and 0xFF)] / 255.0f
             var b = lut[512 + (p and 0xFF)] / 255.0f
@@ -59,7 +74,7 @@ object RecipeDevelopApplier {
             val ir = (r * 255.0f + 0.5f).toInt().coerceIn(0, 255)
             val ig = (g * 255.0f + 0.5f).toInt().coerceIn(0, 255)
             val ib = (b * 255.0f + 0.5f).toInt().coerceIn(0, 255)
-            pixels[i] = ((p ushr 24 and 0xFF) shl 24) or (ir shl 16) or (ig shl 8) or ib
+            return ((p ushr 24 and 0xFF) shl 24) or (ir shl 16) or (ig shl 8) or ib
         }
     }
 
@@ -79,7 +94,10 @@ object RecipeDevelopApplier {
      *          （旧実装では tint は暗黙に無視されていた。今回から実際に効く。トーンパイプライン
      *          順序自体は変更していない）。
      * 【警告対象】ディテール（PR-28c で適用開始）の未適用要素 / ジオメトリの未対応要素
-     * （光学補正・透視）/ 局所マスク。
+     * （光学補正・透視）/ 正規化できない局所マスク。
+     * 【適用済みのため警告対象外（PR-29b）】局所マスク（linear/radial/brush・feather・
+     * マスク毎 adjustments）は geometry → develop → masks → detail の正本順序で適用される
+     * （[RecipeMaskApplier]）。
      * 自由角度回転は PR-28b で適用開始したため警告対象外（[RecipeGeometry.rotateArbitrary]）。
      */
     fun unappliedNodeWarnings(recipe: EditRecipe): List<String> {
@@ -96,8 +114,11 @@ object RecipeDevelopApplier {
         if (g.lensProfileId != null || g.perspective != null) {
             warnings += "lens/perspective corrections not applied (not implemented)"
         }
-        if (recipe.masks.isNotEmpty()) {
-            warnings += "local masks not applied (not implemented)"
+        // PR-29a/29b: 局所マスクは適用済み（[RecipeMaskApplier]）。ただし正規化できないノード
+        // （未知種別・未知パス・範囲外・maskId 重複・上限超過）は1件も適用できないため、
+        // その場合だけ警告する（正当なレシピに偽警告を出さない）。
+        if (recipe.masks.isNotEmpty() && MaskSpecs.normalizeAll(recipe.masks) == null) {
+            warnings += "local masks invalid or out of range (preserved only, not applied)"
         }
         return warnings
     }

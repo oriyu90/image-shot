@@ -2,10 +2,12 @@ package com.imageshot.core.database
 
 import com.imageshot.core.model.AdjustmentId
 import com.imageshot.core.model.EditEventKind
+import com.imageshot.core.model.EditEventStatus
 import com.imageshot.core.model.EditNodeSpecs
 import com.imageshot.core.model.EditRecipe
 import com.imageshot.core.model.ImageOpResult
 import com.imageshot.core.model.LEGACY_EVENT_TYPE_PARAM
+import com.imageshot.core.model.MaskSpecs
 import com.imageshot.core.model.RecipeParameterEdit
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -893,6 +895,346 @@ class EditStoreTest {
         val decoded = EditRecordCodec.decodeRecipe(json, RecipeSchemaVersion1)
         assertEquals(recipe.develop, decoded.develop)
         assertEquals(recipe.geometry, decoded.geometry)
+    }
+
+    // ---- PR-29a/29b: 局所マスク（LOCAL イベント・payload v1・絶対状態スナップショット）----
+
+    /** 正規化可能なマスク（linear・必須4点 + 既定 feather を明示）。 */
+    private fun mask(
+        id: String = "m1",
+        maskType: String = "linear",
+        parameters: Map<String, Double> = mapOf(
+            "x0" to 0.2,
+            "y0" to 0.2,
+            "x1" to 0.8,
+            "y1" to 0.8,
+            "feather" to 0.6,
+        ),
+        adjustments: Map<String, Double> = mapOf("develop.tone.exposureEv" to 0.7),
+    ) = EditRecipe.MaskNode(
+        maskId = id,
+        maskType = maskType,
+        parameters = parameters,
+        adjustments = adjustments,
+    )
+
+    private fun commitMaskList(
+        store: EditStore,
+        base: EditStore.EditStoreState,
+        masks: List<EditRecipe.MaskNode>,
+        maskId: String? = null,
+    ): EditStore.EditStoreState = runBlocking {
+        assertIs<ImageOpResult.Success<EditStore.EditStoreState>>(
+            store.commitMasks(base.documentId, base.currentRevision, masks, maskId),
+        ).value
+    }
+
+    @Test
+    fun commitMasks_writesLocalPayloadV1_appliesRecipeAndHistory() {
+        val backend = FakeBackend()
+        val store = store(backend)
+        var state = bootstrap(store)
+
+        state = commitMaskList(store, state, listOf(mask(id = "m1")), maskId = "m1")
+        assertEquals(1L, state.currentRevision)
+        // 正本列挙: LOCAL は IMPLEMENTED_M1 の payload v1（Room schema 不変）。
+        assertEquals(EditEventKind.LOCAL.id, backend.revisions.single().eventType)
+        assertEquals(1, backend.revisions.single().payloadSchemaVersion)
+        assertEquals(EditEventStatus.IMPLEMENTED_M1, EditEventKind.LOCAL.status)
+        assertEquals(1, EditEventKind.LOCAL.payloadShapeSchemaVersion)
+        // レシピへ適用（正規化済み）。
+        val applied = state.recipe.masks.single()
+        assertEquals("m1", applied.maskId)
+        assertEquals("linear", applied.maskType)
+        assertEquals(1, applied.version)
+        assertEquals(0.7, applied.adjustments.getValue("develop.tone.exposureEv"), 0.0)
+        assertEquals(0.6, applied.parameters.getValue("feather"), 0.0)
+        assertTrue(applied.brushStrokes.isEmpty())
+
+        // payload 形状 v1: {"masks":[...],"maskId":...,"op":...}
+        val payload = EditRecordCodec.decodeEventPayload(backend.revisions.single().payloadJson)
+        assertEquals("apply", (payload["op"] as JsonPrimitive).content)
+        assertEquals("m1", (payload["maskId"] as JsonPrimitive).content)
+        val masksArray = payload["masks"] as kotlinx.serialization.json.JsonArray
+        val maskObject = masksArray.single() as JsonObject
+        assertEquals("m1", (maskObject["maskId"] as JsonPrimitive).content)
+        assertEquals("linear", (maskObject["maskType"] as JsonPrimitive).content)
+        assertEquals(1, (maskObject["version"] as JsonPrimitive).content.toInt())
+        assertEquals(
+            listOf("x0", "y0", "x1", "y1", "feather"),
+            (maskObject["parameters"] as JsonObject).keys.toList(),
+        )
+        assertEquals(
+            listOf("develop.tone.exposureEv"),
+            (maskObject["adjustments"] as JsonObject).keys.toList(),
+        )
+        assertTrue((maskObject["brushStrokes"] as kotlinx.serialization.json.JsonArray).isEmpty())
+        // 履歴: 絶対状態（masks）と操作対象 maskId を持つ。
+        assertEquals(1, state.history.single().masks!!.size)
+        assertEquals("m1", state.history.single().maskId)
+        assertTrue(state.canUndo)
+    }
+
+    @Test
+    fun commitMasks_brushStrokesRoundTripThroughPayload() {
+        val backend = FakeBackend()
+        val store = store(backend)
+        var state = bootstrap(store)
+        state = commitMaskList(
+            store,
+            state,
+            listOf(
+                EditRecipe.MaskNode(
+                    maskId = "b1",
+                    maskType = "brush",
+                    brushStrokes = listOf(
+                        EditRecipe.BrushStroke(0.25, 0.75, 0.1, opacity = 0.5),
+                        EditRecipe.BrushStroke(0.5, 0.5, 0.2),
+                    ),
+                    adjustments = mapOf("develop.color.saturation" to -0.5),
+                ),
+            ),
+        )
+        assertEquals(2, state.recipe.masks.single().brushStrokes.size)
+        assertEquals(
+            listOf(
+                EditRecipe.BrushStroke(0.25, 0.75, 0.1, opacity = 0.5),
+                EditRecipe.BrushStroke(0.5, 0.5, 0.2, opacity = 1.0),
+            ),
+            state.recipe.masks.single().brushStrokes,
+        )
+        val payload = EditRecordCodec.decodeEventPayload(backend.revisions.single().payloadJson)
+        val maskObject = (payload["masks"] as kotlinx.serialization.json.JsonArray).single() as JsonObject
+        val strokes = maskObject["brushStrokes"] as kotlinx.serialization.json.JsonArray
+        assertEquals(2, strokes.size)
+        assertEquals(0.5, ((strokes[0] as JsonObject)["opacity"] as JsonPrimitive).content.toDouble(), 0.0)
+    }
+
+    @Test
+    fun commitMasks_rejectsInvalidInputsWithoutAppendingEvents() {
+        val backend = FakeBackend()
+        val store = store(backend)
+        val base = bootstrap(store)
+
+        // 1) maskId 重複
+        assertIs<ImageOpResult.Failure>(
+            runBlocking {
+                store.commitMasks(
+                    base.documentId,
+                    0L,
+                    listOf(mask(id = "dup"), mask(id = "dup")),
+                )
+            },
+        )
+        // 2) 上限超過（MAX_MASKS + 1）
+        assertIs<ImageOpResult.Failure>(
+            runBlocking {
+                store.commitMasks(
+                    base.documentId,
+                    0L,
+                    List(MaskSpecs.MAX_MASKS + 1) { mask(id = "m$it") },
+                )
+            },
+        )
+        // 3) 未知種別
+        assertIs<ImageOpResult.Failure>(
+            runBlocking {
+                store.commitMasks(base.documentId, 0L, listOf(mask(maskType = "vignette")))
+            },
+        )
+        // 4) 不合格 adjustments パス / 範囲外
+        assertIs<ImageOpResult.Failure>(
+            runBlocking {
+                store.commitMasks(
+                    base.documentId,
+                    0L,
+                    listOf(mask(adjustments = mapOf("develop.detail.sharpen" to 0.5))),
+                )
+            },
+        )
+        assertIs<ImageOpResult.Failure>(
+            runBlocking {
+                store.commitMasks(
+                    base.documentId,
+                    0L,
+                    listOf(mask(adjustments = mapOf("develop.tone.contrast" to 1.5))),
+                )
+            },
+        )
+        // 5) 楽観排他（stale baseRevision）
+        assertIs<ImageOpResult.Failure>(
+            runBlocking { store.commitMasks(base.documentId, 7L, listOf(mask())) },
+        )
+        // 失敗時はイベントを追加しない（§7.2）・レシピも動かさない。
+        assertEquals(0, backend.revisions.size)
+        assertEquals(0L, backend.docs[base.documentId]!!.currentRevision)
+        assertTrue(base.recipe.masks.isEmpty())
+    }
+
+    @Test
+    fun commitMasks_allowsLimitBoundaryAndEmptyList() {
+        val backend = FakeBackend()
+        val store = store(backend)
+        var state = bootstrap(store)
+        // 上限ちょうど（MAX_MASKS）は許可。
+        state = commitMaskList(store, state, List(MaskSpecs.MAX_MASKS) { mask(id = "m$it") })
+        assertEquals(8, state.recipe.masks.size)
+        // 空リストは全削除として許可。
+        state = commitMaskList(store, state, emptyList())
+        assertTrue(state.recipe.masks.isEmpty())
+        assertEquals(2L, state.currentRevision)
+        val payload = EditRecordCodec.decodeEventPayload(backend.revisions.last().payloadJson)
+        assertTrue((payload["masks"] as kotlinx.serialization.json.JsonArray).isEmpty())
+        assertNull(payload["maskId"])
+    }
+
+    @Test
+    fun undoRedoMasks_restoreAbsoluteStates() {
+        val store = store()
+        var state = bootstrap(store)
+        val first = listOf(mask(id = "m1", adjustments = mapOf("develop.tone.exposureEv" to 0.7)))
+        val second = listOf(
+            mask(id = "m1", adjustments = mapOf("develop.tone.exposureEv" to 0.7)),
+            mask(id = "m2", adjustments = mapOf("develop.color.saturation" to -0.5)),
+        )
+        state = commitMaskList(store, state, first, maskId = "m1")
+        state = commitMaskList(store, state, second, maskId = "m2")
+        assertEquals(2, state.recipe.masks.size)
+
+        // undo は「1つ前の絶対状態」へ差し替え（削除ではなく新規イベント）。
+        val afterUndo = applied(runBlocking { store.undo(state.documentId) })
+        assertEquals(1, afterUndo.recipe.masks.size)
+        assertEquals("m1", afterUndo.recipe.masks.single().maskId)
+        assertEquals(RecipeParameterEdit.OP_UNDO, afterUndo.history.last().op)
+        assertEquals(EditEventKind.LOCAL.id, afterUndo.history.last().eventType)
+        assertTrue(afterUndo.canRedo)
+
+        val afterRedo = applied(runBlocking { store.redo(afterUndo.documentId) })
+        assertEquals(2, afterRedo.recipe.masks.size)
+        assertEquals(listOf("m1", "m2"), afterRedo.recipe.masks.map { it.maskId })
+        assertEquals(RecipeParameterEdit.OP_REDO, afterRedo.history.last().op)
+    }
+
+    @Test
+    fun undoFirstMaskEvent_restoresEmptyMasks() {
+        val store = store()
+        var state = bootstrap(store)
+        state = commitMaskList(store, state, listOf(mask(id = "m1")))
+        val afterUndo = applied(runBlocking { store.undo(state.documentId) })
+        assertTrue(afterUndo.recipe.masks.isEmpty())
+        val afterRedo = applied(runBlocking { store.redo(afterUndo.documentId) })
+        assertEquals("m1", afterRedo.recipe.masks.single().maskId)
+    }
+
+    @Test
+    fun masksReload_fromEventPayload_andFromSnapshotRange() {
+        val backend = FakeBackend()
+        val store = store(backend)
+        var state = bootstrap(store)
+        state = commitMaskList(store, state, listOf(mask(id = "m1", maskType = "brush", parameters = mapOf("feather" to 0.3))))
+        // イベント再生（スナップショット未作成）でも復元できる。
+        val reloaded = assertIs<ImageOpResult.Success<EditStore.EditStoreState>>(
+            runBlocking { store.load(state.documentId) },
+        ).value
+        assertEquals(1, reloaded.recipe.masks.size)
+        assertEquals("brush", reloaded.recipe.masks.single().maskType)
+        assertEquals(1, reloaded.decodeSummary.applied)
+
+        // スナップショット周期まで進める（24 件目で作成）。
+        while (state.currentRevision < EditStore.SNAPSHOT_EVERY) {
+            state = commit(store, state, AdjustmentId.EXPOSURE, 0.1)
+        }
+        assertEquals(1, backend.snapshots.size)
+        assertTrue(backend.snapshots.single().recipeJson.contains("\"masks\""))
+        val fromSnapshot = assertIs<ImageOpResult.Success<EditStore.EditStoreState>>(
+            runBlocking { store.load(state.documentId) },
+        ).value
+        assertEquals(EditStore.SNAPSHOT_EVERY.toLong(), fromSnapshot.snapshotRevisionNo)
+        assertEquals("m1", fromSnapshot.recipe.masks.single().maskId)
+        // スナップショット範囲内の LOCAL イベントは二重適用しない（適用数に数えない）。
+        assertEquals(0, fromSnapshot.decodeSummary.applied)
+    }
+
+    @Test
+    fun invalidMaskPayloadRows_stayPreservedOnly() {
+        val backend = FakeBackend()
+        val store = store(backend)
+        val base = bootstrap(store)
+        val docId = base.documentId
+        val payloads = listOf(
+            // 未知種別
+            """{"op":"apply","masks":[{"maskId":"x","maskType":"vignette"}]}""",
+            // masks が配列でない
+            """{"op":"apply","masks":"nope"}""",
+            // masks 欠落
+            """{"op":"apply"}""",
+            // maskId 重複
+            """{"op":"apply","masks":[
+                {"maskId":"d","maskType":"linear","parameters":{"x0":0.0,"y0":0.0,"x1":1.0,"y1":1.0}},
+                {"maskId":"d","maskType":"linear","parameters":{"x0":0.0,"y0":0.0,"x1":1.0,"y1":1.0}}]}""",
+            // 範囲外 adjustment
+            """{"op":"apply","masks":[{"maskId":"o","maskType":"linear",
+                "parameters":{"x0":0.0,"y0":0.0,"x1":1.0,"y1":1.0},
+                "adjustments":{"develop.tone.contrast":2.0}}]}""",
+        )
+        backend.docs[docId] = backend.docs[docId]!!.copy(currentRevision = payloads.size.toLong())
+        payloads.forEachIndexed { index, payload ->
+            val revisionNo = index + 1L
+            backend.revisions += EditRevisionEntity(
+                documentId = docId,
+                revisionNo = revisionNo,
+                eventType = EditEventKind.LOCAL.id,
+                payloadJson = payload,
+                payloadSchemaVersion = 1,
+                committedAt = revisionNo,
+                checksum = EditChecksums.revisionChecksum(docId, revisionNo, EditEventKind.LOCAL.id, payload),
+            )
+        }
+        val reloaded = assertIs<ImageOpResult.Success<EditStore.EditStoreState>>(
+            runBlocking { store.load(docId) },
+        ).value
+        assertEquals(0, reloaded.decodeSummary.applied)
+        assertEquals(payloads.size, reloaded.decodeSummary.preservedOnly)
+        // 既定値へ落とさない（マスク無しのまま）・履歴には現れる（表示は保持）。
+        assertTrue(reloaded.recipe.masks.isEmpty())
+        assertEquals(payloads.size, reloaded.history.size)
+        assertTrue(reloaded.history.all { it.masks == null })
+        // 保持行の後でも継続確定は壊れない。
+        val next = commitMaskList(store, reloaded, listOf(mask(id = "after")))
+        assertEquals(1, next.recipe.masks.size)
+        assertEquals("after", next.recipe.masks.single().maskId)
+    }
+
+    @Test
+    fun maskPayloadWithoutOptionalFields_isReadableWithDefaults() {
+        val backend = FakeBackend()
+        val store = store(backend)
+        val base = bootstrap(store)
+        val docId = base.documentId
+        // version / adjustments / brushStrokes を欠く payload（追加フィールド前の書込み形式）。
+        val payload = """{"op":"apply","masks":[{"maskId":"m1","maskType":"linear",
+            "parameters":{"y1":1.0,"x0":0.0,"y0":0.0,"x1":1.0}}]}"""
+        backend.docs[docId] = backend.docs[docId]!!.copy(currentRevision = 1L)
+        backend.revisions += EditRevisionEntity(
+            documentId = docId,
+            revisionNo = 1L,
+            eventType = EditEventKind.LOCAL.id,
+            payloadJson = payload,
+            payloadSchemaVersion = 1,
+            committedAt = 1L,
+            checksum = EditChecksums.revisionChecksum(docId, 1L, EditEventKind.LOCAL.id, payload),
+        )
+        val reloaded = assertIs<ImageOpResult.Success<EditStore.EditStoreState>>(
+            runBlocking { store.load(docId) },
+        ).value
+        assertEquals(1, reloaded.decodeSummary.applied)
+        val node = reloaded.recipe.masks.single()
+        assertEquals(1, node.version)
+        assertTrue(node.adjustments.isEmpty())
+        assertTrue(node.brushStrokes.isEmpty())
+        // feather は既定補完（linear=1.0）・キー順は正準。
+        assertEquals(1.0, node.parameters.getValue("feather"), 0.0)
+        assertEquals(listOf("x0", "y0", "x1", "y1", "feather"), node.parameters.keys.toList())
     }
 
     private companion object {

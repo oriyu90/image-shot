@@ -168,16 +168,40 @@ class RecipeDevelopApplierTest {
     }
 
     @Test
-    fun unappliedNodeWarnings_freeAngleApplied_masksOnlyWarns() {
-        // PR-28b: 自由角度は適用済み（警告対象外）。マスクのみ未適用として警告される。
+    fun unappliedNodeWarnings_freeAngleAndMasksApplied_noWarnings() {
+        // PR-28b: 自由角度は適用済み（警告対象外）。
+        // PR-29b: 局所マスクも適用済み（geometry → develop → masks → detail）→ 偽警告を出さない。
         val recipe = defaultRecipe().copy(
             geometry = EditRecipe.GeometryParams(angleDeg = 3.5),
-            masks = listOf(EditRecipe.MaskNode(maskId = "m1", maskType = "linear")),
+            masks = listOf(
+                EditRecipe.MaskNode(
+                    maskId = "m1",
+                    maskType = "linear",
+                    parameters = mapOf(
+                        "x0" to 0.2, "y0" to 0.2, "x1" to 0.8, "y1" to 0.8, "feather" to 0.6,
+                    ),
+                    adjustments = mapOf("develop.tone.exposureEv" to 0.7),
+                ),
+            ),
         )
         val warnings = RecipeDevelopApplier.unappliedNodeWarnings(recipe)
         assertFalse(warnings.any { it.contains("geometry") })
-        assertTrue(warnings.any { it.contains("mask") })
+        assertFalse(warnings.any { it.contains("mask") })
+        assertTrue(warnings.isEmpty())
+    }
+
+    @Test
+    fun unappliedNodeWarnings_invalidMask_warnsPreservedOnly() {
+        // 正規化できないマスク（未知種別・必須パラメータ欠落）は 1 件も適用できない → 警告する。
+        val recipe = defaultRecipe().copy(
+            masks = listOf(
+                EditRecipe.MaskNode(maskId = "bad", maskType = "vignette"),
+                EditRecipe.MaskNode(maskId = "m2", maskType = "linear"), // 必須キー欠落
+            ),
+        )
+        val warnings = RecipeDevelopApplier.unappliedNodeWarnings(recipe)
         assertEquals(1, warnings.size)
+        assertTrue(warnings.single().contains("mask"))
     }
 
     @Test

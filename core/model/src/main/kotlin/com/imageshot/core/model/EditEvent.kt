@@ -30,8 +30,9 @@ const val LEGACY_EVENT_TYPE_PARAM = "param"
  * - `id` は EditRevision.eventType 列に書込む安定型ID（英語・永続形式）。将来の形式変更でも
  *   id を再利用しない。
  * - IMPLEMENTED_M1: tone/wb/color（スライダー）+ curve（全体/master + R/G/B）+ hsl（8系統）+
- *   geometry（自由角度/反転/自由クロップ）+ detail（シャープ/輝度NR・PR-28c）。
- *   local は RESERVED_M3。RESERVED は形状未確定であり、適用も解釈もしない（PRESERVED_ONLY、§7.1）。
+ *   geometry（自由角度/反転/自由クロップ）+ detail（シャープ/輝度NR・PR-28c）+
+ *   local（局所マスク・PR-29a/29b）。
+ *   RESERVED（現在は該当なし）は形状未確定であり、適用も解釈もしない（PRESERVED_ONLY、§7.1）。
  * - payload 形式は保存列側で `payloadSchemaVersion` を伴う JSON で保存する（ADR-022 確定）。
  */
 enum class EditEventKind(
@@ -125,12 +126,21 @@ enum class EditEventKind(
         PAYLOAD_SHAPE_SCHEMA_VERSION_1,
     ),
 
-    /** 局所補正（マスク）。payload 未設計（M3 対応予定）。 */
+    /**
+     * 局所補正（マスク）。PR-29a/29b で IMPLEMENTED_M1 へ昇格。
+     * payload 形状 v1（絶対状態スナップショット・Room schema 変更なし）:
+     * `{"masks":[{"maskId","maskType","version","parameters":{...},"adjustments":{...},
+     * "brushStrokes":[{"x","y","radius","opacity"}...]}...],"maskId":"<操作対象>","op":"apply"}`
+     * - `masks` は当該確定後の**全マスク**（相対差分ではない）。空配列は「全削除」を表す。
+     * - `maskId` は操作対象の補助メタデータ（履歴表示用・適用には無関係。省略可）。
+     * - 正規化・上限（[MaskSpecs.MAX_MASKS]）・重複拒否は core:database の `EditStore.commitMasks` が担う。
+     * - undo/redo は他のノード種と同じ「前状態へ差し替え」で表現する。
+     */
     LOCAL(
         "local",
         "局所補正（マスク）",
-        EditEventStatus.RESERVED_M3,
-        null,
+        EditEventStatus.IMPLEMENTED_M1,
+        PAYLOAD_SHAPE_SCHEMA_VERSION_1,
     ),
     ;
 

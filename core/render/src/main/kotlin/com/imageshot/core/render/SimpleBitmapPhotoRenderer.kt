@@ -206,6 +206,9 @@ class SimpleBitmapPhotoRenderer(
         )
         pixels = plane.pixels
         RecipeDevelopApplier.applyToPixels(pixels, recipe.develop)
+        // PR-29b: 局所マスク（geometry → develop → masks → detail の正本順序）。
+        // 重みは preview 尺ではキャッシュ（[MaskWeightCache]）、大画像は帯処理。
+        RecipeMaskApplier.applyToPixels(pixels, plane.width, plane.height, recipe.masks)
         // PR-28c: 空間 stage（develop 後・Bitmap 生成前）。preview/export で同一関数。
         val detail = RecipeDetailApplier.applyToPixels(pixels, plane.width, plane.height, recipe.develop.detail)
 
@@ -225,9 +228,10 @@ class SimpleBitmapPhotoRenderer(
          */
         val RENDER_WARNINGS = arrayOf(
             "8bit-sRGB CPU fallback pipeline (ADR-005 float/tile pipeline not implemented)",
-            "unimplemented nodes ignored: vignette, local masks, chroma noise reduction " +
-                "(curve/HSL/geometry incl. free-angle/detail sharpen+lumaNR are applied)",
-            "tone/curve/HSL node formulas are design-stage; visual quality unverified (no golden tests)",
+            "unimplemented nodes ignored: vignette, chroma noise reduction " +
+                "(curve/HSL/geometry incl. free-angle/detail sharpen+lumaNR/local masks are applied)",
+            "tone/curve/HSL/mask node formulas are design-stage; visual quality unverified " +
+                "(device golden ΔE only, no ColorChecker)",
         )
 
         /**
