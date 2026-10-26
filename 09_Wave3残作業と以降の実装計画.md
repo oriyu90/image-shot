@@ -19,7 +19,7 @@
 | `1355191` | **PR-28a（D1 per-channel curves・golden ΔE 4 ケース化）** |
 | `3023051` | **PR-28b（D4 自由角度/自由クロップ）+ PR-28c（D2 ディテール）**（実装連続のため 1 コミットに統合・golden 5→6 ケース化） |
 | `006d850` | PR-28c 12MP 超軽量経路テスト・06/09 同期 |
-| （本 PR） | **PR-30（G2 availability・G3 inset・F3 adaptive）** |
+| `bff70c1` | **PR-30（G2 availability・G3 inset・F3 adaptive）** |
 
 ### 1.2 PR-28a（D1 per-channel curves）実施結果 — **commit `1355191`・2026-10-26**
 
