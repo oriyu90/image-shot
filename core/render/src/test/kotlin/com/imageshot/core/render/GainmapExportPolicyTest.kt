@@ -1,5 +1,6 @@
 package com.imageshot.core.render
 
+import com.imageshot.core.model.EditNodeSpecs
 import com.imageshot.core.model.EditRecipe
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -7,13 +8,13 @@ import org.junit.Test
 /**
  * [GainmapExportPolicy.classify] の純ロジック検証（JVM）。
  *
- * 契約（ADR-026 stage-1）:
+ * 契約（ADR-026 stage-1・PR-28a 同期更新）:
  * - 画素へ効く変換が全て乗算型（露出 EV・WB 温度/tint 利得）で、実行ジオメトリ変換が
  *   なく format=JPEG なら PASS_THROUGH。
- * - 非乗算 LUT（コントラスト等）・master カーブ非中立・彩度/HSL・実行ジオメトリ・
- *   非JPEG 出力 → STRIP_TO_SDR。
- * - 現行で画素に適用されないノード（R/G/B channel curves・detail・自由角度・レンズ/透視・
- *   局所マスク）は判定に含めない（将来の適用化時に同期更新必要・KDoc 参照）。
+ * - 非乗算 LUT（コントラスト等）・master カーブ非中立・R/G/B チャンネルカーブ非中立
+ *   （PR-28a で画素適用が開始）・彩度/HSL・実行ジオメトリ・非JPEG 出力 → STRIP_TO_SDR。
+ * - 現行で画素に適用されないノード（detail・自由角度・レンズ/透視・局所マスク）は
+ *   判定に含めない（将来の適用化時に同期更新必要・KDoc 参照）。
  *
  * 【明示】gainmap 自体の保全/剝離挙動は androidTest（実機）の担当。本テストは分類器のみ。
  */
@@ -94,10 +95,45 @@ class GainmapExportPolicyTest {
     }
 
     @Test
+    fun `non-neutral channel curves break pass-through after PR-28a`() {
+        // PR-28a で R/G/B チャンネルカーブは画素適用対象になった（master 直後・表示値ドメイン）。
+        val r = recipe(
+            develop = EditRecipe.DevelopParams(
+                curve = EditRecipe.Curve(
+                    rgb = EditNodeSpecs.CURVE_NEUTRAL_RGB,
+                    r = listOf(listOf(0.0, 0.0), listOf(0.5, 0.62), listOf(1.0, 1.0)),
+                ),
+            ),
+        )
+        val g = recipe(
+            develop = EditRecipe.DevelopParams(
+                curve = EditRecipe.Curve(g = listOf(listOf(0.0, 0.0), listOf(1.0, 0.9))),
+            ),
+        )
+        val b = recipe(
+            develop = EditRecipe.DevelopParams(
+                curve = EditRecipe.Curve(b = listOf(listOf(0.0, 0.0), listOf(0.5, 0.8), listOf(1.0, 1.0))),
+            ),
+        )
+        for (item in listOf("r" to r, "g" to g, "b" to b)) {
+            assertEquals(
+                "channel=${item.first}",
+                GainmapExportPolicy.Mode.STRIP_TO_SDR,
+                GainmapExportPolicy.classify(item.second, "JPEG"),
+            )
+        }
+    }
+
+    @Test
     fun `channel curves detail and masks are not applied and do not block`() {
+        // チャンネルの「非空だが恒等（中立 2 点）」は画素不変なので pass-through を維持する。
+        // （detail・マスクは画素不変ノードであり判定に含めない — KDoc 契約は不変。）
         val channels = recipe(
             develop = EditRecipe.DevelopParams(
-                curve = EditRecipe.Curve(r = listOf(listOf(0.0, 0.0), listOf(1.0, 1.0))),
+                curve = EditRecipe.Curve(
+                    r = EditNodeSpecs.CURVE_NEUTRAL_RGB,
+                    b = EditNodeSpecs.CURVE_NEUTRAL_RGB,
+                ),
                 detail = EditRecipe.Detail(sharpen = 0.5),
             ),
         )

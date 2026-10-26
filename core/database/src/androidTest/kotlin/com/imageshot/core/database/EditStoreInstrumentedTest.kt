@@ -62,7 +62,7 @@ class EditStoreInstrumentedTest {
         state = commit(state, AdjustmentId.SATURATION, 40.0)
         // 温度は往復可逆な領域の値（-40 は K 端でクランプされ非可逆のため -20 を使用）。
         state = commit(state, AdjustmentId.TEMPERATURE, -20.0)
-        state = commitCurve(state, listOf(listOf(0.8, 1.0), listOf(1.0, 0.6), listOf(0.2, 0.0)))
+        state = commitCurve(state, EditRecipe.Curve(rgb = listOf(listOf(0.8, 1.0), listOf(1.0, 0.6), listOf(0.2, 0.0))))
         state = commitGeometry(
             state,
             EditRecipe.GeometryParams(cropNorm = listOf(0.1, 0.1, 0.9, 1.0), angleDeg = 90.0, mirrorX = true),
@@ -335,9 +335,9 @@ class EditStoreInstrumentedTest {
 
     private suspend fun commitCurve(
         state: EditStore.EditStoreState,
-        points: List<List<Double>>,
+        curve: EditRecipe.Curve,
     ): EditStore.EditStoreState =
-        store.commitCurve(state.documentId, state.currentRevision, points).requireSuccess("commitCurve")
+        store.commitCurve(state.documentId, state.currentRevision, curve).requireSuccess("commitCurve")
 
     private suspend fun commitGeometry(
         state: EditStore.EditStoreState,

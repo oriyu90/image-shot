@@ -10,7 +10,10 @@ import com.imageshot.core.model.RecipeParameterEdit
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.coroutines.runBlocking
@@ -462,10 +465,11 @@ class EditStoreTest {
     private fun commitCurve(
         store: EditStore,
         base: EditStore.EditStoreState,
-        points: List<List<Double>>,
+        curve: EditRecipe.Curve,
+        editedChannel: String? = null,
     ): EditStore.EditStoreState = runBlocking {
         assertIs<ImageOpResult.Success<EditStore.EditStoreState>>(
-            store.commitCurve(base.documentId, base.currentRevision, points),
+            store.commitCurve(base.documentId, base.currentRevision, curve, editedChannel),
         ).value
     }
 
@@ -484,7 +488,11 @@ class EditStoreTest {
         val backend = FakeBackend()
         val store = store(backend)
         var state = bootstrap(store)
-        state = commitCurve(store, state, listOf(listOf(0.8, 1.0), listOf(1.0, 0.6), listOf(0.2, 0.0))) // 無順序入力
+        state = commitCurve(
+            store,
+            state,
+            EditRecipe.Curve(rgb = listOf(listOf(0.8, 1.0), listOf(1.0, 0.6), listOf(0.2, 0.0))),
+        ) // 無順序入力
         assertEquals(1L, state.currentRevision)
         assertEquals(EditEventKind.CURVE.id, backend.revisions.single().eventType)
         // 正規化済み（x 昇順・y クランプ）。
@@ -496,7 +504,7 @@ class EditStoreTest {
 
         // 不正な点列は FAIL（既定値に落とさない）。
         val failure = runBlocking {
-            store.commitCurve(state.documentId, state.currentRevision, listOf(listOf(0.5, 0.5)))
+            store.commitCurve(state.documentId, state.currentRevision, EditRecipe.Curve(rgb = listOf(listOf(0.5, 0.5))))
         }
         assertIs<ImageOpResult.Failure>(failure)
     }
@@ -505,8 +513,8 @@ class EditStoreTest {
     fun undoCurve_restoresPreviousPoints_andRedoRestoresIt() {
         val store = store()
         var state = bootstrap(store)
-        state = commitCurve(store, state, listOf(listOf(0.0, 0.0), listOf(0.5, 0.7), listOf(1.0, 1.0)))
-        state = commitCurve(store, state, listOf(listOf(0.0, 0.5), listOf(1.0, 1.0)))
+        state = commitCurve(store, state, EditRecipe.Curve(rgb = listOf(listOf(0.0, 0.0), listOf(0.5, 0.7), listOf(1.0, 1.0))))
+        state = commitCurve(store, state, EditRecipe.Curve(rgb = listOf(listOf(0.0, 0.5), listOf(1.0, 1.0))))
         assertEquals(listOf(0.0, 0.5), state.recipe.develop.curve.rgb[0])
 
         val afterUndo = assertIs<EditStore.UndoOutcome.Applied>(
@@ -530,7 +538,7 @@ class EditStoreTest {
     fun undoFirstCurveEvent_restoresNeutralCurve() {
         val store = store()
         var state = bootstrap(store)
-        state = commitCurve(store, state, listOf(listOf(0.25, 0.1), listOf(0.75, 0.9)))
+        state = commitCurve(store, state, EditRecipe.Curve(rgb = listOf(listOf(0.25, 0.1), listOf(0.75, 0.9))))
         val afterUndo = assertIs<EditStore.UndoOutcome.Applied>(
             assertIs<ImageOpResult.Success<EditStore.UndoOutcome>>(
                 runBlocking { store.undo(state.documentId) },
@@ -538,6 +546,146 @@ class EditStoreTest {
         ).state
         assertEquals(EditNodeSpecs.CURVE_NEUTRAL_RGB, afterUndo.recipe.develop.curve.rgb)
     }
+
+    // ---- PR-28a: R/G/B チャンネルカーブ（curve 全量 payload・ch 補助値）----
+
+    @Test
+    fun commitChannelCurve_writesFullCurvePayload_andAppliesChannelsToRecipe() {
+        val backend = FakeBackend()
+        val store = store(backend)
+        var state = bootstrap(store)
+        state = commitCurve(
+            store,
+            state,
+            EditRecipe.Curve(
+                rgb = EditNodeSpecs.CURVE_NEUTRAL_RGB,
+                r = listOf(listOf(0.0, 0.0), listOf(0.5, 0.62), listOf(1.0, 1.0)),
+                b = listOf(listOf(0.0, 0.0), listOf(1.0, 0.85)),
+            ),
+            editedChannel = "r",
+        )
+        assertEquals(EditEventKind.CURVE.id, backend.revisions.single().eventType)
+        // payload 形状 v1: rgb 必須・非空チャンネルのみ・ch は編集対象。
+        val payload = EditRecordCodec.decodeEventPayload(backend.revisions.single().payloadJson)
+        val curveObj = payload["curve"] as JsonObject
+        assertEquals(EditNodeSpecs.CURVE_NEUTRAL_RGB, parsePointsOf(curveObj, "rgb"))
+        assertEquals(listOf(listOf(0.0, 0.0), listOf(0.5, 0.62), listOf(1.0, 1.0)), parsePointsOf(curveObj, "r"))
+        assertEquals(listOf(listOf(0.0, 0.0), listOf(1.0, 0.85)), parsePointsOf(curveObj, "b"))
+        assertNull(curveObj["g"]) // 未編集チャンネルは収めない
+        assertEquals("r", (curveObj["ch"] as JsonPrimitive).content)
+        // recipe への適用（チャンネルごと入る・master は無変化）。
+        assertEquals(EditNodeSpecs.CURVE_NEUTRAL_RGB, state.recipe.develop.curve.rgb)
+        assertEquals(listOf(listOf(0.0, 0.0), listOf(0.5, 0.62), listOf(1.0, 1.0)), state.recipe.develop.curve.r)
+        assertEquals(listOf(listOf(0.0, 0.0), listOf(1.0, 0.85)), state.recipe.develop.curve.b)
+        assertEquals(emptyList<List<Double>>(), state.recipe.develop.curve.g)
+        // 履歴項目: カーブ全量 + 編集チャンネル。
+        assertEquals("r", state.history.single().curveChannel)
+        assertEquals(state.recipe.develop.curve, state.history.single().curve)
+    }
+
+    @Test
+    fun undoChannelCurve_restoresEmptyAndRedoRestoresPoints() {
+        val store = store()
+        var state = bootstrap(store)
+        state = commitCurve(
+            store,
+            state,
+            EditRecipe.Curve(
+                rgb = EditNodeSpecs.CURVE_NEUTRAL_RGB,
+                r = listOf(listOf(0.0, 0.0), listOf(0.5, 0.62), listOf(1.0, 1.0)),
+            ),
+            editedChannel = "r",
+        )
+        assertTrue(state.recipe.develop.curve.r.isNotEmpty())
+
+        // undo はカーブ全量を戻す（フォールバック=中立 rgb+未編集ch ではなく、直前状態へ）。
+        val afterUndo = applied(runBlocking { store.undo(state.documentId) })
+        assertEquals(EditNodeSpecs.CURVE_NEUTRAL_RGB, afterUndo.recipe.develop.curve.rgb)
+        assertEquals(emptyList<List<Double>>(), afterUndo.recipe.develop.curve.r)
+        assertEquals("r", afterUndo.history.last().curveChannel)
+        assertTrue(afterUndo.canRedo)
+
+        val afterRedo = applied(runBlocking { store.redo(afterUndo.documentId) })
+        assertEquals(listOf(listOf(0.0, 0.0), listOf(0.5, 0.62), listOf(1.0, 1.0)), afterRedo.recipe.develop.curve.r)
+        assertEquals("r", afterRedo.history.last().curveChannel)
+    }
+
+    @Test
+    fun commitChannelCurve_invalidChannel_orInvalidEditedChannel_failsNoEventAppended() {
+        val backend = FakeBackend()
+        val store = store(backend)
+        val state = bootstrap(store)
+        // 非空チャンネルの正規化失敗（1点のみ）は FAIL（master と同一の規約継続）。
+        val badChannel = runBlocking {
+            store.commitCurve(
+                state.documentId,
+                state.currentRevision,
+                EditRecipe.Curve(r = listOf(listOf(0.4, 0.7))),
+                "r",
+            )
+        }
+        assertIs<ImageOpResult.Failure>(badChannel)
+        // editedChannel は r/g/b または null のみ受理。
+        val badKey = runBlocking {
+            store.commitCurve(state.documentId, state.currentRevision, EditRecipe.Curve(), "red")
+        }
+        assertIs<ImageOpResult.Failure>(badKey)
+        assertEquals(0, backend.revisions.size) // 失敗時はイベントを追加しない（§7.2）。
+    }
+
+    @Test
+    fun rawCurvePayload_withInvalidCh_orMalformedChannel_staysPreservedOnly() {
+        val backend = FakeBackend()
+        val store = store(backend)
+        val base = bootstrap(store)
+        val docId = base.documentId
+        // ch が不正値: 行全体を解釈せず保持のみ（部分適用を作らない）。
+        val badCh = """{"op":"apply","curve":{"ch":"red","rgb":[[0.0,0.0],[1.0,1.0]]}}"""
+        // チャンネル点列が正規化不能（1点）: 同じく保持のみ。
+        val badChannel = """{"op":"apply","curve":{"rgb":[[0.0,0.0],[1.0,1.0]],"r":[[0.4,0.7]]}}"""
+        backend.docs[docId] = backend.docs[docId]!!.copy(currentRevision = 2L)
+        backend.revisions += EditRevisionEntity(
+            documentId = docId,
+            revisionNo = 1L,
+            eventType = EditEventKind.CURVE.id,
+            payloadJson = badCh,
+            payloadSchemaVersion = 1,
+            committedAt = 1L,
+            checksum = EditChecksums.revisionChecksum(docId, 1L, EditEventKind.CURVE.id, badCh),
+        )
+        backend.revisions += EditRevisionEntity(
+            documentId = docId,
+            revisionNo = 2L,
+            eventType = EditEventKind.CURVE.id,
+            payloadJson = badChannel,
+            payloadSchemaVersion = 1,
+            committedAt = 2L,
+            checksum = EditChecksums.revisionChecksum(docId, 2L, EditEventKind.CURVE.id, badChannel),
+        )
+        val reloaded = assertIs<ImageOpResult.Success<EditStore.EditStoreState>>(
+            runBlocking { store.load(docId) },
+        ).value
+        assertEquals(0, reloaded.decodeSummary.applied)
+        assertEquals(2, reloaded.decodeSummary.preservedOnly)
+        // どちらも中立的な既定レシピから動かさない（未解釈に落とさない）。
+        assertEquals(EditNodeSpecs.CURVE_NEUTRAL_RGB, reloaded.recipe.develop.curve.rgb)
+        assertEquals(emptyList<List<Double>>(), reloaded.recipe.develop.curve.r)
+    }
+
+    /** raw payload の点列キー → 点列（型が違えば null）。テスト用の限定的読み出し。 */
+    private fun parsePointsOf(curve: JsonObject, key: String): List<List<Double>>? {
+        val arr = curve[key] as? kotlinx.serialization.json.JsonArray ?: return null
+        return arr.map { pt ->
+            val nums = pt as? kotlinx.serialization.json.JsonArray ?: return null
+            nums.map { (it as? JsonPrimitive)?.doubleOrNull ?: return null }
+        }
+    }
+
+    /** UndoOutcome を Applied 状態へほどく（既存コードの型はやや冗長のため共通化）。 */
+    private fun applied(outcome: ImageOpResult<EditStore.UndoOutcome>): EditStore.EditStoreState =
+        assertIs<EditStore.UndoOutcome.Applied>(
+            assertIs<ImageOpResult.Success<EditStore.UndoOutcome>>(outcome).value,
+        ).state
 
     @Test
     fun commitGeometry_undoGeometry_roundTrip() {

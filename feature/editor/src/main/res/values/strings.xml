@@ -23,7 +23,6 @@
     <string name="editor_tab_geometry">ジオメトリ</string>
     <string name="editor_tab_detail">ディテール</string>
     <string name="editor_tab_local">局部補正</string>
-    <string name="editor_tab_hint_curve">R/G/B チャンネル別は未実装（master のみ）</string>
     <string name="editor_tab_hint_geometry">自由角度・自由クロップ・透視/レンズは未実装</string>
     <string name="editor_tab_hint_detail">未実装（M2 予約）</string>
     <string name="editor_tab_hint_local">未実装（M3 予約）</string>
@@ -45,11 +44,15 @@
     <string name="editor_slider_temp_relative">%1$s −100..100</string>
 
     <!-- カーブタブ -->
-    <string name="editor_curve_title">カーブ（master）</string>
+    <string name="editor_curve_title">カーブ</string>
     <string name="editor_curve_reset">中立へ戻す</string>
     <string name="editor_curve_help">ドラッグ: 点を移動 / タップ: 点を追加 / ダブルタップ: 点を削除</string>
     <string name="editor_curve_points">制御点 %1$d/%2$d（最小 %3$d）</string>
-    <string name="editor_curve_channels_hint">R/G/B チャンネル別カーブは未実装（master のみ。チャンネル指定はレシピに値があれば警告表示）</string>
+    <!-- 対象チャンネル chips（PR-28a）。master の値は履歴書式（editor_history_curve）と共用。 -->
+    <string name="editor_curve_channel_master">マスター</string>
+    <string name="editor_curve_channel_r">R</string>
+    <string name="editor_curve_channel_g">G</string>
+    <string name="editor_curve_channel_b">B</string>
 
     <!-- HSL タブ -->
     <string name="editor_hsl_title">HSL カラーミキサー（標準8系統）</string>
@@ -86,7 +89,7 @@
     <string name="editor_history_op_apply">変更</string>
     <string name="editor_history_op_undo">取り消し</string>
     <string name="editor_history_op_redo">やり直し</string>
-    <string name="editor_history_curve">%1$s: マスターカーブ %2$d点</string>
+    <string name="editor_history_curve">%1$s: %2$sカーブ %3$d点</string>
     <string name="editor_history_geometry_plain">%1$s: ジオメトリ</string>
     <string name="editor_history_geometry">%1$s: ジオメトリ（%2$s）</string>
     <string name="editor_history_by_path">%1$s %2$s</string>

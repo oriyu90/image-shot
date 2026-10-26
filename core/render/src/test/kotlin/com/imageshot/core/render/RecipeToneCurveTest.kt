@@ -1,6 +1,7 @@
 package com.imageshot.core.render
 
 import com.imageshot.core.model.AdjustmentId
+import com.imageshot.core.model.EditNodeSpecs
 import com.imageshot.core.model.EditRecipe
 import kotlin.math.abs
 import org.junit.Assert.assertEquals
@@ -234,6 +235,78 @@ class RecipeToneCurveTest {
         val grayGain = sat(gray[0], gray[1], gray[2]) - 0.0f
         val vividGain = sat(vivid[0], vivid[1], vivid[2]) - 1.0f
         assertTrue(grayGain >= vividGain)
+    }
+
+    // ---- R/G/B チャンネルカーブ（PR-28a）----
+
+    /** PR-28a D1 の golden recipe と同一形状（r=中間点リフト / g=未編集 / b=上域沈め）。 */
+    private fun channelCurveDevelop() = EditRecipe.DevelopParams(
+        curve = EditRecipe.Curve(
+            rgb = EditNodeSpecs.CURVE_NEUTRAL_RGB,
+            r = listOf(listOf(0.0, 0.0), listOf(0.5, 0.62), listOf(1.0, 1.0)),
+            b = listOf(listOf(0.0, 0.0), listOf(1.0, 0.85)),
+        ),
+    )
+
+    @Test
+    fun channelCurves_redLifts_blueDips_greenStaysIdentity() {
+        val luts = RecipeToneCurve.buildChannelLuts(channelCurveDevelop())
+        val base = lut()
+        for (v in 32..223) {
+            assertTrue("R curve should lift at $v", luts[v] >= base[v])
+            assertTrue("B curve should dip at $v", luts[512 + v] <= base[512 + v])
+        }
+        // 中間域で実際に動くこと（等号の並びだけで終わっていない検査）。
+        assertTrue("R curve should strictly lift midtones", luts[128] > base[128])
+        assertTrue("B curve should strictly dip upper range", luts[512 + 224] < base[512 + 224])
+        // g は未編集（空）= 恒等 short-circuit → 量子化差を作らない。
+        for (v in 0..255) {
+            assertWithin("G channel must stay identity at $v", luts[256 + v], base[256 + v], 1)
+        }
+    }
+
+    @Test
+    fun channelCurves_neutralIdentityPointsAreShortCircuited_bitIdenticalToDefault() {
+        // チャンネルが「非空だが中立（恒等 2 点）」の場合は恒等 short-circuit。
+        // LUT 全域で既定（チャンネル空）とビット一致する（量子化ドリフトを作らない契約）。
+        val neutral = EditRecipe.DevelopParams(
+            curve = EditRecipe.Curve(r = EditNodeSpecs.CURVE_NEUTRAL_RGB, b = EditNodeSpecs.CURVE_NEUTRAL_RGB),
+        )
+        val luts = RecipeToneCurve.buildChannelLuts(neutral)
+        val base = lut()
+        assertTrue(luts.contentEquals(base))
+    }
+
+    @Test
+    fun channelCurves_monotonicAcrossAllChannels() {
+        val luts = RecipeToneCurve.buildChannelLuts(channelCurveDevelop())
+        for (ch in 0..2) {
+            var prev = -1
+            for (v in 0..255) {
+                val out = luts[ch * 256 + v]
+                assertTrue("non-monotonic ch=$ch v=$v", out >= prev)
+                assertTrue("out of range ch=$ch v=$v", out in 0..255)
+                prev = out
+            }
+        }
+    }
+
+    @Test
+    fun channelCurves_malformedPoints_degradeToIdentity() {
+        // 正規化失敗（1点のみ）のチャンネルは恒等（master と同一規約）。他チャンネルの曲線は生きる。
+        val malformed = EditRecipe.DevelopParams(
+            curve = EditRecipe.Curve(
+                rgb = EditNodeSpecs.CURVE_NEUTRAL_RGB,
+                r = listOf(listOf(0.4, 0.7)), // 1点 → 正規化失敗
+                b = listOf(listOf(0.0, 0.0), listOf(1.0, 0.85)),
+            ),
+        )
+        val luts = RecipeToneCurve.buildChannelLuts(malformed)
+        val base = lut()
+        for (v in 0..255) {
+            assertWithin("malformed R must degrade to identity at $v", luts[v], base[v], 1)
+        }
+        assertTrue("B curve still applies", luts[512 + 224] < base[512 + 224])
     }
 
     private fun assertWithin(message: String, actual: Int, expected: Int, tolerance: Int) {

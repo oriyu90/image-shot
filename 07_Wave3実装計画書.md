@@ -206,6 +206,46 @@
 - **リスク**: 空間フィルタは develop 性能に直接当たる（NFR-04 の p95 100ms との境界明示）。失敗時契約: 性能が超過の際は「処理が重いため自動降格しました」明示を UI に。
 - **工数**: M/L（分割可能）/ **依存**: schema 不変の確証（payload JSON 互換）検証が先行チェック。
 
+### 12.1 PR-28a 実施結果（✅ 2026-10-26・1 コミット〔push なし・⑧〕）
+
+**実装**:
+
+1. **`RecipeToneCurve.buildChannelLuts`**: master を先に評価した後、表示ドメインで各チャンネルカーブを評価して合成。空/中立チャンネルは null（恒等 short-circuit）・不正形（非単調/範囲外）は null。**master-only 経路面の浮動小数点演算順序を不変に保ち**、既存 golden 3 ケースのビット決定論を保全（下記基線一致が実測根拠）。
+2. **payload v1 拡張**（Room schema 不変・`ignoreUnknownKeys` 後方互換）: `{"curve":{"ch"?:"r"|"g"|"b","rgb":[[x,y]...],"r"?:[...],"g"?:[...],"b"?:[...]}`。`rgb` 必須・非中立チャンネルのみ格納・`ch` は履歴表示用の補助メタ（**適用は curve 全量**・不正 `ch` は行全体 PRESERVED_ONLY=中立フォールバック〔実測: EditStoreTest/RecipeToneCurveTest〕）。旧 payload（rgb のみ）読み込み互換テスト緑。
+3. **EditStore**: `commitCurve` は Curve 全量スナップショット + `editedChannel`。undo/redo は全量復元（undo 後も `previous ?? last.curveChannel` の選択保持）。
+4. **editor UI**: `CurveChannel`(マスター/R/G/B) chips 行（`editor_curve_channel_*` 4 key 新規）・`editor_tab_hint_curve`/`editor_curve_channels_hint` 撤去（実装済み化）・title「カーブ（master）」→「カーブ」・履歴書式 `%1$s: %2$sカーブ %3$d点`（%2$s は channel ラベル・master=「マスター」で**旧文言「マスターカーブ」と出力一致**）。文言台帳は 08 §1/§5。
+
+**全自動検証**: `./gradlew test` exit 0 / `:feature:{editor,export,library}:lintDebug` error 0 / `:app:assembleRelease` 緑 / `tools/ui_strings_check.py` 違反 0（例外 29 行）。
+
+**golden ΔE（実機 TB710FU `HA2EPG4J`・API 36・4/4 OK 21.15s・2048×1365 合成ソース q90・JPEG sRGB IEC61966-2.1・pxCount 2,795,520）**:
+
+- 既存 3 ケース基線（決定論維持の実証）: non-neutral 0.5077/1.2212・downsampled 0.5255/1.1926・neutral 恒等 0.09996
+- **追加 D1 `per-channel-curve(r-lift,g-empty,b-dip)-non-neutral`: mean 0.5164 / p95 1.1061 < (1.00 / 2.00)**・ΔE2000 参考 0.3174/0.7408・レシピ r=3 点/g=空/b=2 点
+
+**実機機能検証（全て実測: screencap 画素値 + uiautomator + run-as DB dump）**:
+
+- 取り込み: SAF（DocumentsUI）で `offline_probe_a_rev0.jpg` 1600×1200 → editor r0
+- **r0 中立プレビューは probe 原図と 3×3 グリッド均値 diff 0.0（ビット一致）**。先に観察した「カーブタブのプレビュー色ずれ」は**誤り** — probe 原図自体が「左上: 暗・右上: マゼンタ・左下: 緑」の対角グラデ（旧メモの sips 800px 縮小表示が誤認の発生源）。追跡不要
+- r1: R chip → canvas tap 3 点(commit) → プレビュー R 127→195・G/B 不変 = **チャンネル分離の実測**
+- r2 undo → 中立へビット復帰 / r3 redo → r1 とビット一致（履歴 3 件）
+- r4: master chip → 点追加 → 全チャンネル上振れ 246/223/230（master+R の積み上げ整合）
+- r5: R chip → 「中立へ戻す」 → **R のみ未編集化・master 保全 233/223/230**
+- force-stop → 再起動 → r5・履歴 5 件・**プレビュー ビット一致で復元**（233/223/230 等）
+
+**DB payload 実測**（`run-as` + sqlite3・edit_revisions r1〜r5 全量）:
+
+```
+r1 apply {"ch":"r","rgb":[中立 2 点],"r":[[0.0,0.0],[0.4992,0.7681],[1.0,1.0]]}
+r2 undo {"ch":"r","rgb":[中立]}            ← 編集チャンネル r を除いた全量戻し
+r3 redo {"ch":"r","rgb":[中立],"r":[3 点]}  ← r 再付与
+r4 apply {"ch" 省略,"rgb":[0.4605,0.8941] を含む 3 点,"r":[3 点保持]}  ← master 編集
+r5 apply {"ch":"r","rgb":[master 3 点のみ]}  ← R のみリセット
+```
+
+payload v1 契約どおり・`edit_documents.currentRevision=5`。
+
+**残置/未確認**: カーブダブルタップ点削除はコード実装のみで**実機未観測**（adb 短間隔 tap で未再現）→ 28b の実機作業で併検。48MP proxy 性能記録は 28c（D2・NFR-04 実測）と fixture 待ちに含める。
+
 ## 13. PR-29: D3 マスク（M3・schema/演算/UI 分割）
 
 - **既存計画継承**: 06 A3 判断待ち④。`02` §5.2 D3。

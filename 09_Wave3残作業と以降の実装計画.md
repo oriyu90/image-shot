@@ -1,46 +1,41 @@
-# 09 Wave-3 残作業と以降の実装計画（2026-10-25 作成・PR-27 検証完了時点）
+# 09 Wave-3 残作業と以降の実装計画（2026-10-25 作成・2026-10-26 更新: PR-27/28a 完了・28b 着手前時点）
 
 **位置づけ**: 正本の進捗は `06_未実装欠陥と実装計画.md` §3.2 と `benchmark/nfr_catalog.md`。手順詳細は `07_Wave3実装計画書.md`。本書は 2026-10-25 時点での現状整理・コード接続点の実地調査・以降の着手順（ユーザー確定判断 4 件を含む）をまとめた作業計画であり、進捗が動く都度 06/07 を PR 単位で更新する。
 
 ---
 
-## 1. 現状整理（2026-10-25 時点）
+## 1. 現状整理（2026-10-25 作成・2026-10-26 更新）
 
-### 1.1 コミット済み（Wave-3 PR-17〜23・全 7 コミット）
+### 1.1 コミット済み（Wave-3 PR-17〜27・全 8 コミット）
 
 | コミット | 内容 |
 |---|---|
 | `a968072` / `5014592` | PR-17（NFR-08 bundletool 実寸）・PR-18（NFR-07 しきい値確定・ΔE 決定論確認） |
-| `ae63ca6`…`3954828` | PR-19（表示名連鎖+実機観察）・PR-20（NFR-11 オフライン+kill 30/30）・PR-17〜20 正本更新 |
+| `ae63da6`…`3954828` | PR-19（表示名連鎖+実機観察）・PR-20（NFR-11 オフライン+kill 30/30）・PR-17〜20 正本更新 |
 | `ea65cae` | PR-21（AGP 9.4 / Gradle 9.6 / built-in Kotlin 2.2.10・全回帰緑） |
 | `819a8b7` | PR-22（S-03 HDR spike → ADR-026 Accepted） |
 | `0e8463d` | PR-23（A3 stage-1 gainmap policy 実装 + B2 EXIF whitelist pass-through・unit 232/232） |
+| `2b753f8` | PR-27（G1 文字列外部化・08 台帳新設・実機 en-US Ja フォールバック確認・lint 3 feature error 0） |
 
-### 1.2 PR-27（G1 文字列外部化）— **コード・検証とも完了、未コミット**
+※ 第 9 コミット = **PR-28a**（本節 1.2・2026-10-26・push なし〔⑧〕）。
 
-本日検証済みの実績:
+### 1.2 PR-28a（D1 per-channel curves）— **実装・全検証完了・2026-10-26 本コミットで締め（第 9 コミット）**
+
+実装: payload v1 に `ch`/`r`/`g`/`b` を追加（後方互換・Room schema v1 不変・適用は curve 全量・不正 `ch` は行 PRESERVED_ONLY）・`RecipeToneCurve.buildChannelLuts` per-channel 評価（master 先行・中立/空=恒等 short-circuit・master-only 経路の FP 演算順序不変で既存 golden 決定論保全）・`EditStore.commitCurve` 全量 + `editedChannel`・undo/redo 全量復元・editor chips UI（`CurveChannel` 4 選択・履歴ラベル `%2$s = channel label`）・文言回収（`editor_tab_hint_curve`/`editor_curve_channels_hint` 削除・channel 4 key 追加・title「カーブ」〔08 §5〕）。
 
 | 検証 | 結果 |
 |---|---|
-| `python3 tools/ui_strings_check.py` | **違反 0 件**・台帳例外 29 行（EditEvent 8 / ExportRenderer 1 / GainmapExportPolicy 4 / ContentUriImportRepository 6 / ImportSniff 7 / ProviderErrors 3） |
-| `08_文字列台帳.md` | 作成済み・実測値と突き合わせ修正済（res 正本: library 34 / editor 120 / export 20 項） |
-| unit 全回帰 | 232/232 緑（PR-23 分 +18 を含む） |
-| `:app:assembleRelease` | 39s OK |
-| `:core:render:assembleDebugAndroidTest` | OK（androidTest/benchmark に HSL_BANDS 型変更参照 0 件・影響なし実地確認） |
-| 実機 TB710FU（`HA2EPG4J`） | `install -r` Success → ライブラリ/編集（基本調整・HSL タブ）とも全文言 res 表示で正常・プロセス生存・FATAL 0 |
+| `./gradlew test` | exit 0（EditStore/RecipeToneCurve/RecipeDevelopApplier/GainmapExportPolicy の新規・更新テスト含む全回帰緑） |
+| lint / release | `:feature:{editor,export,library}:lintDebug` error 0・`:app:assembleRelease` 緑 |
+| `tools/ui_strings_check.py` | **違反 0 件**・例外 29 行（08 §3 に 2026-10-26 実行記録） |
+| golden ΔE（実機 TB710FU・4/4 OK 21.15s） | 既存 3 ケース基線一致（non-neutral 0.5077/1.2212・downsampled 0.5255/1.1926・neutral 恒等 0.09996）+ **新規 D1 `per-channel-curve(r-lift,g-empty,b-dip)`: mean 0.5164 / p95 1.1061 < (1.00/2.00)**（ΔE2000 参考 0.3174/0.7408・2048×1365 合成ソース q90・pxCount 2,795,520） |
+| 実機機能（SAF import 1600×1200 probe） | r1 R 編集 commit → プレビュー R 127→195・**G/B 不変**（チャンネル分離実測）/ r2 undo 中立ビット復帰 / r3 redo r1 ビット復帰 / r4 master 追加全チャンネル上振れ 246/223/230 / r5 R のみ「中立へ戻す」master 保全 233/223/230 / **force-stop→再起動で r5・履歴 5 件ビット復元** |
+| DB payload 実測（run-as+sqlite3） | r1〜r5 全量が payload v1 契約どおり（r2 undo は r を除いた全量・r4 は ch 省略+r 保持・r5 は rgb master のみ）・`currentRevision=5` |
 
-コード差分（11 変更 + 8 新規）: core:model（`AdjustmentId.label` 削除 / HSL ラベル対→`List<String>` / 新規 `Strings` fun interface）・3 feature（strings.xml 新規 + Screen/VM の `stringResource`/`strings.get` 結線 + `AdjustmentLabels`/`HslBandLabels` 写像）・app（`AppContainer.strings` → 3 VM 結線）。
+- 異常切り分けの結論（実測で確定）: 先に観察した「カーブタブ プレビュー色ずれ」は**誤り** — r0 中立プレビューは probe 原図と 3×3 グリッド均値 diff 0.0（ビット一致）。probe 原図自体が対角グラデ（左上: 暗・右上: マゼンタ・左下: 緑）で、旧メモの sips 800px 縮小表示が誤認の発生源。追跡不要
+- **残置**: ① カーブダブルタップ点削除はコード実装のみで実機未観測（28b で併検）② 48MP proxy 性能記録は 28c（NFR-04 実測）と fixture 待ちに含める
 
-### 1.3 PR-27 の残作業（Step 0・着手可）
-
-1. **残検証 3 件（07 §11 受入の残部・実施未)**:
-   - `feature:*` の lint（strings 参照整合）を明示実行（`lintDebug`。release での lintVital は通過済み）
-   - 実機 **en ロケール**での目視 1 回（en 文言未作成 → fallback=ja 文言となる挙動の確認）
-   - **フォント大型/最小幅**での目視 1 回ずつ（タブ・履歴行・書き出し概要文が縦に伸びる箇所の確認）
-2. `06` §3.2 PR-27 行を ✅ 完了記述に更新（検証実績・08 台帳参照・文言変更 2 件の注記）
-3. 1 コミット（feat: 文字列外部化 + docs: 08 台帳・tools チェッカー）→ PR 完了レポート
-
-### 1.4 ブロッカー・待機
+### 1.3 ブロッカー・待機
 
 - **PR-24/25/26 fixture**: 48MP RAW サンプルと 4GB 端末 — ユーザー決定「外部 SD 経由で提供」で調達待ち。到着した時点で PR-24 spike を先行着手
 - **ADR-026 stage-2 制限**: カメラ/第三者由来 UltraHDR ソースが未観察（自作合成でのみ実測済）
@@ -56,7 +51,7 @@
 
 | 欠陥 | 現状の接続点（実地確認済み） | PR-28 系での拡張内容 |
 |---|---|---|
-| **D1** per-channel カーブ | `RecipeToneCurve.buildChannelLuts(develop)`（RecipeToneCurve.kt:114）— LUT 生成は develop 一括。payload は master のみ（同ファイル :132）。DB は payload JSON 演算で Room 影響なし | payload に r/g/b 配列を同構造で追加（`ignoreUnknownKeys` 後方互換）・`buildChannelLuts` 引数拡張・カーブ UI のチャンネル選択 |
+| **D1** per-channel カーブ | `RecipeToneCurve.buildChannelLuts(develop)`（RecipeToneCurve.kt:114）— LUT 生成は develop 一括。payload は master のみ（同ファイル :132）。DB は payload JSON 演算で Room 影響なし | payload に r/g/b 配列を同構造で追加（`ignoreUnknownKeys` 後方互換）・`buildChannelLuts` 引数拡張・カーブ UI のチャンネル選択 — **✅ 28a で実施済み（2026-10-26・07 §12.1）** |
 | **D4** 自由角度・自由クロップ | `GeometryParams.angleDeg` は**既に Double**（EditRecipe.kt:87）・制限は `EditNodeSpecs.isAllowedAngle` + `RecipeGeometry.apply`（rotateCw90×quarterTurns + rect クロップ）。`cropNorm` は正規化矩形でモデル側は最小拡張 | `isAllowedAngle` の解除 + 任意角逆写像（Matrix）新段・エッジ塗り仕様確定・UI（自由角スライダー/最小エッジドラッグ） |
 | **D2** ディテール | `SimpleBitmapPhotoRenderer.kt:220` の警告 `"unimplemented nodes ignored: detail, vignette, local masks"` のまま通過 | unsharp 3x3 luminance + 軽量 NR。preview 尺で NFR-04 初回実測。48MP 対応は fixture 後 |
 
@@ -79,13 +74,14 @@
 
 ## 3. 今後の実装計画（確定・2026-10-25 ユーザー判断込み）
 
-### Step 0: PR-27 締め（即時着手可）→ §1.3 の 3 件
+### Step 0: PR-27 締め — **✅ 完了（commit `2b753f8`）**: lint 3 feature/en-US Ja フォールバック/フォント 2.0+最小幅目視・06 行更新を含む
 
-### Step 1: **PR-28a D1 per-channel curves**（規模 M・28c より先）
+### Step 1: **PR-28a D1 per-channel curves**（規模 M・28c より先）— **✅ 完了 2026-10-26（実施結果: §1.2・07 §12.1）**
 
 - payload JSON 拡張（r/g/b 同構造・旧 payload 読込み互換テスト）・`buildChannelLuts` 引数拡張・カーブ UI（チャンネル選択・hint 文言回収）
 - テスト: JVM 固定値 golden + **ΔE 追加ケース（確定）**・Undo/Redo 往復・DB 復元（kill 注入）
 - 受入: preview=export 同一・旧 payload 読込み緑・06/07 更新・1 commit
+- **実測**: golden ΔE D1 mean 0.5164/p95 1.1061 合格・実機 undo/redo 往復+force-stop 復元 bit 一致・DB payload r1..r5 契約どおり。**旧 payload 読込み互換は JVM テスト締め・kill 注入（30 回）は 28b 以降の実機回帰に含める**
 
 ### Step 2: **PR-28b D4 自由角度・自由クロップ**（規模 M・28a 依存）
 
@@ -121,7 +117,7 @@
 ### 依存図（更新版・2026-10-25）
 
 ```
-PR-27（検証済・未 commit）→ Step0 締め → 28a(D1) → 28b(D4) → 28c(D2・NFR-04 実測)
+28a ✅(2026-10-26) ──→ 28b(D4・次・28a 依存) → 28c(D2・NFR-04 実測)
 fixture 外部 SD（調達待ち）────→ 24(spike/ADR-027) → 25(RAW pipe) → 26(NFR-10+thumbnail)
 Wave-3 完了: 28c と 26 が揃った段階で 29a/b/c → 30 → 完了チェック → ⑦ targetSdk 37 再評価
 ```
@@ -145,5 +141,5 @@ Wave-3 完了: 28c と 26 が揃った段階で 29a/b/c → 30 → 完了チェ�
 
 - 各工数（S/M/L/XL）は 06 §3.2 原則の推定。実際の着手時に行頭に実測値（commit・検証件数） を確定させる。
 - NFR-01/02（vitals）は公開前のため未測定のまま維持。
-- en ロケール目視・フォント両端目視は Step 0 の実施物が未完（プラン計画で確定せず・着手時に実機記録を 06 行に追記）。
+- en ロケール目視・フォント両端目視は **PR-27（`2b753f8`）で実施済**（06 §3.2 PR-27 行に実機記録済み）。
 - RAW/HDR の真の性能実測は fixture 到着まで「未測定」として残る（推定を成果と書かない）。

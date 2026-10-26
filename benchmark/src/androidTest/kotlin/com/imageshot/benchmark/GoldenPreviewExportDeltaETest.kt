@@ -42,6 +42,8 @@ import org.junit.Test
  * （mean < 0.30・p95 は参考記録のみ）は実契約検査。破れた場合は全指標を failure message に出す。
  * 中立（全パラメータ既定）ケースの恒等検査は、プレビューと書き出しが同一ノード実装
  * （RecipeDevelopApplier 共有）であることの検出器として機能する（隠れた片側劣化の発見）。
+ * PR-28a: R/G/B チャンネルカーブの非中立ケース（perChannelCurveRecipe）を追加
+ * （既存しきい値を共用・D1 の golden ΔE 追加）。
  *
  * 測定成果物: targetContext（= com.imageshot.benchmark）の filesDir へ
  * /data/data/com.imageshot.benchmark/files/golden_dE_report.json（全ケースの実測値+パラメータ）。
@@ -90,6 +92,20 @@ class GoldenPreviewExportDeltaETest {
             recipe = neutralRecipe(),
             meanMax = NEUTRAL_MEAN_MAX,
             p95Max = null,
+            provisional = false,
+        )
+    }
+
+    @Test
+    fun goldenDeltaE_perChannelCurve_nonNeutral() {
+        // PR-28a D1: R/G/B チャンネルカーブ（r=中間点リフト / g=未編集 / b=上域沈め）の
+        // プレビュー/書き出し同値契約。非中立しきい値（mean<1.0 / p95<2.0）を共用する
+        // （master カーブ非中立ケースと同一の契約帯 — いずれも LUT 内で合成されるため）。
+        runGoldenCase(
+            case = "per-channel-curve(r-lift,g-empty,b-dip)-non-neutral",
+            recipe = perChannelCurveRecipe(),
+            meanMax = NONNEUTRAL_MEAN_MAX,
+            p95Max = NONNEUTRAL_P95_MAX,
             provisional = false,
         )
     }
@@ -398,6 +414,23 @@ class GoldenPreviewExportDeltaETest {
         source = EditRecipe.RecipeSource(assetId = "asset-1", fingerprint = "fp-golden"),
     )
 
+    /**
+     * PR-28a D1: R/G/B チャンネルカーブの非中立 golden recipe。
+     * r = 3点（0.5 で 0.62: 中間域リフト）/ g = 未編集（空）/ b = 2点（1.0 で 0.85: 上域沈め）。
+     * チャンネル適用は master 直後（sRGB 表示値ドメイン・buildChannelLuts 内 LUT 合成）。
+     */
+    private fun perChannelCurveRecipe(): EditRecipe = EditRecipe(
+        documentId = "golden-deltae",
+        source = EditRecipe.RecipeSource(assetId = "asset-1", fingerprint = "fp-golden"),
+        develop = EditRecipe.DevelopParams(
+            curve = EditRecipe.Curve(
+                rgb = listOf(listOf(0.0, 0.0), listOf(1.0, 1.0)),
+                r = listOf(listOf(0.0, 0.0), listOf(0.5, 0.62), listOf(1.0, 1.0)),
+                b = listOf(listOf(0.0, 0.0), listOf(1.0, 0.85)),
+            ),
+        ),
+    )
+
     // ------------------------------------------------------------------ 成果物 JSON
 
     @Synchronized
@@ -452,6 +485,14 @@ class GoldenPreviewExportDeltaETest {
                 .put("vibrance", recipe.develop.color.vibrance)
                 .put("saturation", recipe.develop.color.saturation)
                 .put("curveNeutral", recipe.develop.curve.rgb == listOf(listOf(0.0, 0.0), listOf(1.0, 1.0)))
+                // PR-28a D1: チャンネルカーブの制御点点数（追加キーのみ・既存キー不変）。
+                .put(
+                    "curveChannelPoints",
+                    JSONObject()
+                        .put("r", recipe.develop.curve.r.size)
+                        .put("g", recipe.develop.curve.g.size)
+                        .put("b", recipe.develop.curve.b.size),
+                )
                 .put("geometryNeutral", recipe.geometry == EditRecipe.GeometryParams()),
         )
         .put(

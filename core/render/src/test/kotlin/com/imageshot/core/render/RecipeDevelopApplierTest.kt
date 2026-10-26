@@ -1,5 +1,6 @@
 package com.imageshot.core.render
 
+import com.imageshot.core.model.EditNodeSpecs
 import com.imageshot.core.model.EditRecipe
 import kotlin.math.abs
 import org.junit.Assert.assertEquals
@@ -106,21 +107,49 @@ class RecipeDevelopApplierTest {
     }
 
     @Test
-    fun unappliedNodeWarnings_masterCurveApplied_noWarning_butChannelCurvesWarn() {
-        // master カーブは適用済みノードのため偽警告にしない（P4 で実装済み）。
+    fun unappliedNodeWarnings_masterAndChannelCurvesApplied_noWarnings() {
+        // master カーブも R/G/B チャンネルカーブも適用済みノードのため偽警告にしない
+        // （PR-23 までの「channel 警告」は PR-28a の画素適用開始で撤去。仕様どおり）。
         val master = defaultRecipe().copy(
             develop = defaultDevelop().copy(
                 curve = EditRecipe.Curve(rgb = listOf(listOf(0.0, 0.0), listOf(0.5, 0.6), listOf(1.0, 1.0))),
             ),
         )
         assertTrue(RecipeDevelopApplier.unappliedNodeWarnings(master).isEmpty())
-        // R/G/B チャンネル別カーブは未実装（master のみ）ため警告する。
         val channels = defaultRecipe().copy(
-            develop = defaultDevelop().copy(curve = EditRecipe.Curve(r = listOf(listOf(0.0, 0.1)))),
+            develop = defaultDevelop().copy(
+                curve = EditRecipe.Curve(
+                    rgb = EditNodeSpecs.CURVE_NEUTRAL_RGB,
+                    r = listOf(listOf(0.0, 0.0), listOf(0.5, 0.62), listOf(1.0, 1.0)),
+                    b = listOf(listOf(0.0, 0.0), listOf(1.0, 0.85)),
+                ),
+            ),
         )
-        val warnings = RecipeDevelopApplier.unappliedNodeWarnings(channels)
-        assertEquals(1, warnings.size)
-        assertTrue(warnings[0].contains("curve"))
+        assertTrue(RecipeDevelopApplier.unappliedNodeWarnings(channels).isEmpty())
+    }
+
+    @Test
+    fun applyToPixels_channelCurve_liftsOnlyTargetChannelWithinQuantization() {
+        // R チャンネルカーブ（中間点リフト）: R は明るく、G/B は量子化差の範囲で不変。
+        val pixels = IntArray(256) { i -> pixel(0xFF, i, i, i) }
+        RecipeDevelopApplier.applyToPixels(
+            pixels,
+            defaultDevelop().copy(
+                curve = EditRecipe.Curve(
+                    rgb = EditNodeSpecs.CURVE_NEUTRAL_RGB,
+                    r = listOf(listOf(0.0, 0.0), listOf(0.5, 0.62), listOf(1.0, 1.0)),
+                ),
+            ),
+        )
+        for (i in 48..208) {
+            val r = (pixels[i] ushr 16) and 0xFF
+            val g = (pixels[i] ushr 8) and 0xFF
+            val b = pixels[i] and 0xFF
+            assertTrue("R should lift at $i", r >= i)
+            assertTrue("R should strictly lift at $i", r > i)
+            abs(g - i).let { assertTrue("G drift $it at $i", it <= 1) }
+            abs(b - i).let { assertTrue("B drift $it at $i", it <= 1) }
+        }
     }
 
     @Test

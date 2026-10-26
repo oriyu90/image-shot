@@ -59,8 +59,10 @@ class EditStore(
         val value: Double?,
         val op: String?,
         val committedAt: Long,
-        /** curve イベントの master 制御点（正規化済み）。スライダー種は null。 */
-        val curvePoints: List<List<Double>>? = null,
+        /** curve イベントのカーブ全量（正規化済み・master+R/G/B チャンネル）。スライダー種は null。 */
+        val curve: EditRecipe.Curve? = null,
+        /** curve イベントの編集対象チャンネル（"r"/"g"/"b"。master 編集・復帰系フォールバックは null）。 */
+        val curveChannel: String? = null,
         /** geometry イベントの絶対状態（正規化済み）。スライダー種は null。 */
         val geometry: EditRecipe.GeometryParams? = null,
     )
@@ -173,16 +175,27 @@ class EditStore(
     }
 
     /**
-     * master カーブ（全体）を絶対状態として確定する。
-     * payload 形状 v1: `{"curve":{"rgb":[[x,y]...]},"op":...}`（ADR-022 の第2段・P4）。
-     * 正規化できない点列は FAIL（既定値へ落とさない）。
+     * トーンカーブ（master + R/G/B チャンネル）を絶対状態として確定する。
+     * payload 形状 v1: `{"curve":{"ch"?:"r"|"g"|"b","rgb":[[x,y]...],"r"?:[...],"g"?:[...],
+     * "b"?:[...]},"op":...}`（ADR-022 の第2段・P4 / PR-28a でチャンネルを画素適用対象に昇格）。
+     * - [curve] は全量（master `rgb` 必須・`r/g/b` は非空のときのみ payload に収める）。
+     * - [editedChannel] は当該確認の編集対象チャンネル（"r"/"g"/"b"、master 編集は null）。
+     *   適用は curve 全量で行い、本引数は payload `ch` に置かれて履歴表示を助ける補助値。
+     * 正規化できない点列（master / 非空チャンネルのいずれも）は FAIL（既定値へ落とさない）。
      */
     suspend fun commitCurve(
         documentId: String,
         baseRevision: Long,
-        points: List<List<Double>>,
+        curve: EditRecipe.Curve,
+        editedChannel: String? = null,
         op: String = RecipeParameterEdit.OP_APPLY,
     ): ImageOpResult<EditStoreState> {
+        if (editedChannel != null && editedChannel !in CURVE_CHANNEL_KEYS) {
+            return ImageOpResult.Failure(
+                ErrorCode.MALFORMED_METADATA,
+                "invalid editedChannel: $editedChannel (require null or $CURVE_CHANNEL_KEYS)",
+            )
+        }
         val doc = backend.getDocument(documentId)
             ?: return ImageOpResult.Failure(ErrorCode.MALFORMED_METADATA, "edit document not found: $documentId")
         if (doc.currentRevision != baseRevision) {
@@ -191,19 +204,42 @@ class EditStore(
                 "stale baseRevision=$baseRevision current=${doc.currentRevision}",
             )
         }
-        val normalized = EditNodeSpecs.normalizeCurve(points)
+        val normalizedRgb = EditNodeSpecs.normalizeCurve(curve.rgb)
             ?: return ImageOpResult.Failure(
                 ErrorCode.MALFORMED_METADATA,
                 "invalid curve points (finite/2..16 points/sorted required)",
             )
+        // 非空チャンネルのみ正規化して収める（空 = 未編集 = payload から省略）。
+        val normalizedR = normalizedChannelPoints(curve.r) ?: return invalidCurveChannel("r")
+        val normalizedG = normalizedChannelPoints(curve.g) ?: return invalidCurveChannel("g")
+        val normalizedB = normalizedChannelPoints(curve.b) ?: return invalidCurveChannel("b")
         val payload = buildJsonObject {
             put("op", op)
             put("curve", buildJsonObject {
-                put("rgb", curvePointsJson(normalized))
+                if (editedChannel != null) put("ch", editedChannel)
+                put("rgb", curvePointsJson(normalizedRgb))
+                if (normalizedR.isNotEmpty()) put("r", curvePointsJson(normalizedR))
+                if (normalizedG.isNotEmpty()) put("g", curvePointsJson(normalizedG))
+                if (normalizedB.isNotEmpty()) put("b", curvePointsJson(normalizedB))
             })
         }
         return appendNodeEvent(doc, EditEventKind.CURVE.id, payload)
     }
+
+    /** チャンネルカーブの正規化（空は未編集としてそのまま通す・非空は正規化。失敗は null）。 */
+    private fun normalizedChannelPoints(points: List<List<Double>>): List<List<Double>>? =
+        if (points.isEmpty()) {
+            points
+        } else {
+            EditNodeSpecs.normalizeCurve(points)
+        }
+
+    /** チャンネルカーブの正規化失敗（§7.2 INVALID・既定値へ落とさない）。 */
+    private fun invalidCurveChannel(channel: String): ImageOpResult.Failure =
+        ImageOpResult.Failure(
+            ErrorCode.MALFORMED_METADATA,
+            "invalid curve points for channel $channel (finite/2..16 points/sorted required)",
+        )
 
     /**
      * ジオメトリ（回転/反転/クロップ）を絶対状態として確定する。
@@ -255,7 +291,8 @@ class EditStore(
                 commitCurve(
                     documentId,
                     doc.currentRevision,
-                    previous?.curvePoints ?: EditNodeSpecs.CURVE_NEUTRAL_RGB,
+                    previous?.curve ?: EditRecipe.Curve(), // フォールバック=中立 rgb + 未編集チャンネル。
+                    previous?.curveChannel ?: last.curveChannel, // 履歴表示用の補助値（適用には無関係）。
                     RecipeParameterEdit.OP_UNDO,
                 )
             } else {
@@ -292,7 +329,8 @@ class EditStore(
                 commitCurve(
                     documentId,
                     doc.currentRevision,
-                    redone?.curvePoints ?: EditNodeSpecs.CURVE_NEUTRAL_RGB,
+                    redone?.curve ?: EditRecipe.Curve(), // フォールバック=中立 rgb + 未編集チャンネル。
+                    redone?.curveChannel ?: last.curveChannel, // 履歴表示用の補助値（適用には無関係）。
                     RecipeParameterEdit.OP_REDO,
                 )
             } else {
@@ -486,19 +524,16 @@ class EditStore(
                 when (rev.eventType) {
                     // ---- P4 ノード種: 絶対状態 payload（スライダー解決経路とは別再生）----
                     EditEventKind.CURVE.id -> {
-                        val points = parseCurvePayload(payload)
+                        val curve = parseCurvePayload(payload)
                         when {
-                            points == null -> {
+                            curve == null -> {
                                 // 形状不一致（旧世代/外部由来）の curve 行: 適用せず保持のみ
                                 // （§7.1 PRESERVED_ONLY 相当）。旧構築の解釈規則と同一挙動。
                                 preservedOnly++
                             }
                             rev.revisionNo > baseRevision -> {
-                                recipe = recipe.copy(
-                                    develop = recipe.develop.copy(
-                                        curve = recipe.develop.curve.copy(rgb = points),
-                                    ),
-                                )
+                                // カーブ全量（master+R/G/B）を絶対状態として適用（PR-28a）。
+                                recipe = recipe.copy(develop = recipe.develop.copy(curve = curve.curve))
                                 applied++
                             }
                             // スナップショット範囲内: 効果はスナップショットに取り込み済み。
@@ -596,11 +631,8 @@ class EditStore(
         val path = (payload["path"] as? JsonPrimitive)?.content
         val value = (payload["value"] as? JsonPrimitive)?.doubleOrNull
         val op = (payload["op"] as? JsonPrimitive)?.content
-        val node = when (rev.eventType) {
-            EditEventKind.CURVE.id -> parseCurvePayload(payload)
-            EditEventKind.GEOMETRY.id -> parseGeometryPayload(payload)
-            else -> null
-        }
+        val curve = if (rev.eventType == EditEventKind.CURVE.id) parseCurvePayload(payload) else null
+        val geometry = if (rev.eventType == EditEventKind.GEOMETRY.id) parseGeometryPayload(payload) else null
         return EditStoreHistoryItem(
             revisionNo = rev.revisionNo,
             eventType = rev.eventType,
@@ -608,21 +640,59 @@ class EditStore(
             value = value,
             op = op,
             committedAt = rev.committedAt,
-            curvePoints = if (rev.eventType == EditEventKind.CURVE.id) node as List<List<Double>>? else null,
-            geometry = if (rev.eventType == EditEventKind.GEOMETRY.id) node as EditRecipe.GeometryParams? else null,
+            curve = curve?.curve,
+            curveChannel = curve?.editedChannel,
+            geometry = geometry,
         )
     }
 
-    /** curve payload v1 → 正規化済み制御点。形状不一致は null（PRESERVED_ONLY）。 */
-    private fun parseCurvePayload(payload: JsonObject): List<List<Double>>? {
+    /**
+     * curve payload v1 → カーブ全量（正規化済み）+ 編集対象チャンネル。
+     * `rgb` 必須。`r/g/b` は任意読み（非空時のみ収める契約・無ければ未編集 = 空）。
+     * `ch` は任意（"r"/"g"/"b" のみ受理・無効値や master 編集は null）。
+     * 適用対象点（rgb / 非空チャンネル）のどれか1つでも正規化できない場合は null
+     * （PRESERVED_ONLY・部分適用を作らない）。
+     */
+    private fun parseCurvePayload(payload: JsonObject): ParsedCurve? {
         val curve = payload["curve"] as? JsonObject ?: return null
-        val rgb = curve["rgb"] as? kotlinx.serialization.json.JsonArray ?: return null
-        val points = rgb.map { element ->
+        val rgbOrNothing = parseCurvePointsNode(curve["rgb"]) ?: return null
+        val rgb = EditNodeSpecs.normalizeCurve(rgbOrNothing) ?: return null
+        val r = optionalChannelPoints(curve["r"]) ?: return null
+        val g = optionalChannelPoints(curve["g"]) ?: return null
+        val b = optionalChannelPoints(curve["b"]) ?: return null
+        val ch = (curve["ch"] as? JsonPrimitive)?.content
+        val editedChannel = ch?.takeIf { it in CURVE_CHANNEL_KEYS }
+        if (ch != null && editedChannel == null) {
+            // ch が存在して不正値: 解釈を誤らないため行全体を保持のみへ（§7.1）。
+            return null
+        }
+        return ParsedCurve(
+            curve = EditRecipe.Curve(rgb = rgb, r = r, g = g, b = b),
+            editedChannel = editedChannel,
+        )
+    }
+
+    /** payload の点列ノード → 2要素 finite 点列（各点 2要素=finite のみ。非配列や曲がった形は null）。 */
+    private fun parseCurvePointsNode(node: kotlinx.serialization.json.JsonElement?): List<List<Double>>? {
+        val rgb = node as? kotlinx.serialization.json.JsonArray ?: return null
+        return rgb.map { element ->
             val pt = element as? kotlinx.serialization.json.JsonArray ?: return null
             pt.map { (it as? JsonPrimitive)?.doubleOrNull ?: return null }
         }
-        return EditNodeSpecs.normalizeCurve(points)
     }
+
+    /** 任意のチャンネル点列（無キーは未編集=空。空配列は未編集。非空は正規化・失敗は null）。 */
+    private fun optionalChannelPoints(node: kotlinx.serialization.json.JsonElement?): List<List<Double>>? {
+        if (node == null) return emptyList()
+        val points = parseCurvePointsNode(node) ?: return null
+        return if (points.isEmpty()) emptyList() else EditNodeSpecs.normalizeCurve(points)
+    }
+
+    /** [parseCurvePayload] の結果（curve 適用値 + 履歴表示用の編集対象チャンネル補助値）。 */
+    private data class ParsedCurve(
+        val curve: EditRecipe.Curve,
+        val editedChannel: String?,
+    )
 
     /** geometry payload v1 → 正規化済み GeometryParams。形状不一致は null（PRESERVED_ONLY）。 */
     private fun parseGeometryPayload(payload: JsonObject): EditRecipe.GeometryParams? {
@@ -653,6 +723,9 @@ class EditStore(
     companion object {
         /** スナップショット作成周期（§3.3「20–50イベント」帯の下限近く）。 */
         const val SNAPSHOT_EVERY = 24
+
+        /** curve payload `ch` に受理するチャンネルキー（KEY=EditRecipe.Curve のフィールド名と一致）。 */
+        private val CURVE_CHANNEL_KEYS = setOf("r", "g", "b")
     }
 }
 

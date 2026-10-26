@@ -66,9 +66,9 @@ import kotlin.math.roundToInt
  * - 基調は暗色ニュートラル（純黒でない低反射背景）、強調色は操作対象1箇所のみ。
  * - 中央プレビュー: pinch ズーム（1x..8x）+ 二本指パン。長押し Before/After は下部の
  *   専用ホールドボタンで行う（ピンチ/パンとタップ長押しのジェスチャ競合を避ける）。
- * - 下部ツールタブ: 基本調整 / カーブ（master のみ） / HSL（8系統） / ジオメトリ
- *   （90°回転・反転・プリセット比クロップ）は実装。ディテール/局部補正は未実装として明示表示。
- *   R/G/B チャンネル別カーブ・自由角度回転・自由クロップ・透視/レンズ補正は未実装（各タブ内で明示）。
+ * - 下部ツールタブ: 基本調整 / カーブ（master + R/G/B チャンネル・PR-28a） / HSL（8系統） /
+ *   ジオメトリ（90°回転・反転・プリセット比クロップ）は実装。ディテール/局部補正は
+ *   未実装として明示表示。自由角度回転・自由クロップ・透視/レンズ補正は未実装（各タブ内で明示）。
  * - スライダー操作はスキーマ（AdjustmentId）から生成。ドラッグ反映は即時、
  *   離した時点で1件確定（onDragEnd → EditStore.commit）。カーブは指を離した時点で
  *   絶対状態イベント確定、ジオメトリはボタン操作ごとに1件確定。
@@ -83,6 +83,7 @@ fun EditorScreen(
     onCurvePreview: (List<List<Double>>) -> Unit,
     onCurveCommit: (List<List<Double>>) -> Unit,
     onCurveReset: () -> Unit,
+    onCurveChannelSelect: (EditorViewModel.CurveChannel) -> Unit,
     onGeometryRotate: (Int) -> Unit,
     onGeometryFlip: (Boolean) -> Unit,
     onGeometryCrop: (Double?) -> Unit,
@@ -115,6 +116,7 @@ fun EditorScreen(
             onCurvePreview = onCurvePreview,
             onCurveCommit = onCurveCommit,
             onCurveReset = onCurveReset,
+            onCurveChannelSelect = onCurveChannelSelect,
             onGeometryRotate = onGeometryRotate,
             onGeometryFlip = onGeometryFlip,
             onGeometryCrop = onGeometryCrop,
@@ -289,7 +291,7 @@ private fun PreviewPane(
 /** ツールタブ。実装済みは [BASIC] [CURVE] [HSL] [GEOMETRY] のみ（ADR-014 に基づく明示）。 */
 private enum class EditorToolTab(val labelRes: Int, val hintRes: Int?, val implemented: Boolean) {
     BASIC(EditorR.string.editor_tab_basic, null, true),
-    CURVE(EditorR.string.editor_tab_curve, EditorR.string.editor_tab_hint_curve, true),
+    CURVE(EditorR.string.editor_tab_curve, null, true),
     HSL(EditorR.string.editor_tab_hsl, null, true),
     GEOMETRY(EditorR.string.editor_tab_geometry, EditorR.string.editor_tab_hint_geometry, true),
     DETAIL(EditorR.string.editor_tab_detail, EditorR.string.editor_tab_hint_detail, false),
@@ -304,6 +306,7 @@ private fun ToolPanel(
     onCurvePreview: (List<List<Double>>) -> Unit,
     onCurveCommit: (List<List<Double>>) -> Unit,
     onCurveReset: () -> Unit,
+    onCurveChannelSelect: (EditorViewModel.CurveChannel) -> Unit,
     onGeometryRotate: (Int) -> Unit,
     onGeometryFlip: (Boolean) -> Unit,
     onGeometryCrop: (Double?) -> Unit,
@@ -334,7 +337,13 @@ private fun ToolPanel(
         }
         when (selected) {
             EditorToolTab.BASIC -> BasicAdjustmentsContent(state, onSliderPreview, onSliderCommit)
-            EditorToolTab.CURVE -> MasterCurveContent(state, onCurvePreview, onCurveCommit, onCurveReset)
+            EditorToolTab.CURVE -> MasterCurveContent(
+                state = state,
+                onCurvePreview = onCurvePreview,
+                onCurveCommit = onCurveCommit,
+                onCurveReset = onCurveReset,
+                onCurveChannelSelect = onCurveChannelSelect,
+            )
             EditorToolTab.HSL -> HslContent(state, onSliderPreview, onSliderCommit)
             EditorToolTab.GEOMETRY -> GeometryContent(state, onGeometryRotate, onGeometryFlip, onGeometryCrop, onGeometryResetCrop)
             EditorToolTab.DETAIL -> UnimplementedContent(
@@ -469,13 +478,14 @@ private fun BasicAdjustmentsContent(
     }
 }
 
-// --------------------------------------------------------------- カーブタブ（master のみ）
+// --------------------------------------------------------------- カーブタブ（master + R/G/B）
 
 /**
- * master（RGB 共通）トーンカーブの操作面（§5.2 の M1 実装範囲）。
+ * トーンカーブの操作面（§5.2 の M1 実装範囲・PR-28a でチャンネル別を追加）。
+ * - 対象チャンネルは chips（マスター / R / G / B）で選ぶ。点列操作はチャンネル共通。
  * - ドラッグ: 制御点移動、タップ: 追加（最大 16 点）、ダブルタップ: 削除（最小 2 点）。
- * - 指を離した時点で正規化+絶対状態確定（EditStore.commitCurve）。
- * - R/G/B チャンネル別カーブは UI 未実装（レンダリングも未適用 → 警告表示）。
+ * - 指を離した時点で正規化+絶対状態確定（EditStore.commitCurve・カーブ全量）。
+ * - 未編集（空）のチャンネルは恒等（中立 2 点）を表示の前提にする（追加/ドラッグで非空化）。
  */
 @Composable
 private fun MasterCurveContent(
@@ -483,6 +493,7 @@ private fun MasterCurveContent(
     onCurvePreview: (List<List<Double>>) -> Unit,
     onCurveCommit: (List<List<Double>>) -> Unit,
     onCurveReset: () -> Unit,
+    onCurveChannelSelect: (EditorViewModel.CurveChannel) -> Unit,
 ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -496,23 +507,43 @@ private fun MasterCurveContent(
             color = EditorPalette.textPrimary,
             modifier = Modifier.weight(1f),
         )
-        // 強調色はこのタブの操作対象（リセット）のみ。
+        // 強調色はこのタブの操作対象（選択チャンネルのリセット）のみ。
         TextButton(onClick = onCurveReset) {
             Text(stringResource(EditorR.string.editor_curve_reset), color = EditorPalette.accent)
+        }
+    }
+    // 対象チャンネル chips（マスター / R / G / B）。横に並べる（幅上限での折返しはスクロールに委ねない）。
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        modifier = Modifier.padding(top = 4.dp),
+    ) {
+        EditorViewModel.CurveChannel.entries.forEach { channel ->
+            CurveChannelChip(
+                label = stringResource(channel.labelRes),
+                selected = channel == state.curveChannel,
+                onClick = { onCurveChannelSelect(channel) },
+            )
         }
     }
     Text(
         text = stringResource(EditorR.string.editor_curve_help),
         style = MaterialTheme.typography.labelSmall,
         color = EditorPalette.textSecondary,
-    ) 
+    )
 
+    // 表示する点列 = 選択チャンネルの確定状態（未編集は恒等 2 点を表示する）。
+    val channelPoints: List<List<Double>> = when (state.curveChannel) {
+        EditorViewModel.CurveChannel.MASTER -> state.curve.rgb
+        EditorViewModel.CurveChannel.RED -> state.curve.r
+        EditorViewModel.CurveChannel.GREEN -> state.curve.g
+        EditorViewModel.CurveChannel.BLUE -> state.curve.b
+    }
     // ドラッグ中はローカルの点列を表示の権原とする（正規化による並べ替えで
     // 選択点が入れ替わる見た目のジャンプを避ける）。確定は正規化済みで行う。
     var dragPoints by remember { mutableStateOf<List<List<Double>>?>(null) }
     var dragIndex by remember { mutableStateOf(-1) }
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
-    val displayed: List<List<Double>> = dragPoints ?: state.curvePoints
+    val displayed: List<List<Double>> = dragPoints ?: channelPoints.ifEmpty { EditNodeSpecs.CURVE_NEUTRAL_RGB }
 
     Canvas(
         modifier = Modifier
@@ -637,10 +668,24 @@ private fun MasterCurveContent(
         color = EditorPalette.textSecondary,
         modifier = Modifier.padding(top = 4.dp),
     )
+}
+
+/** カーブ対象チャンネルの chip（選択中のみ強調）。タブヒントではなくカーブ内の操作対象切替。 */
+@Composable
+private fun CurveChannelChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
     Text(
-        text = stringResource(EditorR.string.editor_curve_channels_hint),
+        text = label,
         style = MaterialTheme.typography.labelSmall,
-        color = EditorPalette.textSecondary,
+        color = if (selected) EditorPalette.textPrimary else EditorPalette.textSecondary,
+        modifier = Modifier
+            .background(if (selected) EditorPalette.panelRaised else EditorPalette.panel)
+            .border(1.dp, EditorPalette.line)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 4.dp),
     )
 }
 

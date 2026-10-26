@@ -19,6 +19,7 @@ import com.imageshot.core.model.EditRecipe
  *   1) スライダー LUT（sRGB→線形 → 露出 → 温度利得 → 黒レベル → シャドウ → 白レベル →
  *      ハイライト → コントラスト → 線形→sRGB）
  *   2) master カーブ（sRGB 表示値ドメイン・R/G/B 等量・LUT 内に合成）
+ *      → R/G/B チャンネルカーブ（sRGB 表示値ドメイン・各チャンネル独立・LUT 内に合成・PR-28a）
  *   3) 彩度 / 自然な彩度（画素残差）
  *   4) HSL 8系統（バンド重み行列、明るさのみ線形光ドメイン）
  *
@@ -67,7 +68,9 @@ object RecipeDevelopApplier {
      * （ADR-014: 無通知に捨てない）。既定値のみのレシピには空を返す。
      *
      * 【適用済みのため警告対象外】tone（露出/コントラスト/ハイライト/シャドウ/白黒レベル）、
-     * 温度、tint、彩度、自然な彩度、master カーブ、HSL 8系統（正規化済み key）。
+     * 温度、tint、彩度、自然な彩度、master カーブ、R/G/B チャンネルカーブ
+     * （PR-28a: master 直後・sRGB 表示値ドメインで各チャンネルに独立適用）、
+     * HSL 8系統（正規化済み key）。
      *   温度: チャンネル利得 = RecipeToneCurve.tempGains（mired 相対・strength 0.4、R+/B−）。
      *   tint : チャンネル利得 = RecipeToneCurve.tintGains（設計段近似・未検証:
      *          t>0 で緑寄り — G *= (1+0.30t)、R *= B *= (1−0.15t)。t<0 はマゼンタ寄りの逆方向。
@@ -75,15 +78,11 @@ object RecipeDevelopApplier {
      *          両利得は buildChannelLuts 内で要素積として合成され、LUT で1回だけ掛かる
      *          （旧実装では tint は暗黙に無視されていた。今回から実際に効く。トーンパイプライン
      *          順序自体は変更していない）。
-     * 【警告対象】R/G/B チャンネルカーブ（master のみ実装）/ ディテール /
-     * ジオメトリの未対応要素（自由角度・光学補正・透視）/ 局所マスク。
+     * 【警告対象】ディテール / ジオメトリの未対応要素（自由角度・光学補正・透視）/ 局所マスク。
      */
     fun unappliedNodeWarnings(recipe: EditRecipe): List<String> {
         val warnings = mutableListOf<String>()
         val d = recipe.develop
-        if (d.curve.r.isNotEmpty() || d.curve.g.isNotEmpty() || d.curve.b.isNotEmpty()) {
-            warnings += "R/G/B channel tone curves not applied (master curve only; channels reserved)"
-        }
         if (d.color.hsl.any { EditNodeSpecs.parseHslKey(it.key) == null || !it.value.isFinite() }) {
             warnings += "unknown HSL keys/values preserved only (not applied)"
         }

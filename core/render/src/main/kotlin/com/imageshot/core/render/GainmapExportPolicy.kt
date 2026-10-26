@@ -16,11 +16,12 @@ import com.imageshot.core.model.EditNodeSpecs
  *   消すことを [実測] spike が確認済み）。
  *
  * 【分類の基準 = 実際に画素へ適用される変換の集合】
- * 現行パイプラインで**画素に全く適用されない**ノード（R/G/Bチャンネルカーブ・ディテール・
- * 自由角度回転・レンズ/透視・局所マスク）は画素内容を変えないため判定に含めない
- * （ADR-014 の unappliedNodeWarnings が欠落を告知する役割を分担）。将来これらのノードが
- * 実装された際は、本分類と [RecipeDevelopApplier]/[RecipeGeometry] の適用集合を必ず
- * 同時に更新すること（乖離すると warning の真実性が崩れる）。
+ * 現行パイプラインで**画素に全く適用されない**ノード（ディテール・自由角度回転・レンズ/透視・
+ * 局所マスク）は画素内容を変えないため判定に含めない（ADR-014 の unappliedNodeWarnings が
+ * 欠落を告知する役割を分担）。将来これらのノードが実装された際は、本分類と
+ * [RecipeDevelopApplier]/[RecipeGeometry] の適用集合を必ず同時に更新すること
+ * （乖離すると warning の真実性が崩れる）。R/G/B チャンネルカーブは PR-28a で画素適用を
+ * 開始した（master 直後・sRGB 表示値ドメイン）ため、非中立のときは本分類で不成立条件に昇格済み。
  *
  * ジオメトリ・orientation を pass-through の不成立条件とする理由: gainmap content は本実装では
  * 回転/反転/クロップ/正立化の同時再索引を行わないため、座標割れが HDR 表示の不整合になる
@@ -73,9 +74,11 @@ object GainmapExportPolicy {
      * （tintGains・設計段近似だが利得乗算である点は [RecipeToneCurve.tintGains] どおり）。
      * 不成立にする（非乗算/再索引が画素へ効く）: コントラスト/ハイライト/シャドウ/白/黒レベル
      * （放物線バンプ LUT）・master カーブ（非中立・[RecipeCurve.isNeutral] と同一判定）・
-     * 彩度/自然な彩度・HSL（非中立・[RecipeHsl.isNeutral] と同一判定）・実行されるジオメトリ変換
-     * （90°回転/反転/クロップ・[EditNodeSpecs.isNeutralGeometry] と同一判定・不正値は安全側不成立）。
-     * 判定しない（画素不変のため）: R/G/B チャンネルカーブ・ディテール・レンズ/透視補正・局所マスク。
+     * R/G/B チャンネルカーブ（非中立・[RecipeCurve.isNeutral] と同一判定・空と恒等点列は通す・
+     * PR-28a で画素適用が開始された）・彩度/自然な彩度・HSL（非中立・[RecipeHsl.isNeutral] と
+     * 同一判定）・実行されるジオメトリ変換（90°回転/反転/クロップ・
+     * [EditNodeSpecs.isNeutralGeometry] と同一判定・不正値は安全側不成立）。
+     * 判定しない（画素不変のため）: ディテール・レンズ/透視補正・局所マスク。
      * decode 段の orientation 正立化は [classify] の orientationTransformed 引数で不成立化する。
      */
     private fun isMultiplicativeOnlyPixelOps(recipe: EditRecipe): Boolean {
@@ -91,6 +94,12 @@ object GainmapExportPolicy {
         // master カーブ: 実適用ゲートと同一判定（RecipeCurve.isNeutral）を使う（非中立なら不成立）。
         val masterCurve = recipe.develop.curve.rgb
         if (!RecipeCurve.isNeutral(masterCurve)) return false
+        // R/G/B チャンネルカーブ（PR-28a 適用開始）: master と同一判定系。
+        // 空配列（未編集）と恒等点列（中立）は画素不変のため通す。
+        val curve = recipe.develop.curve
+        if (curve.r.isNotEmpty() && !RecipeCurve.isNeutral(curve.r)) return false
+        if (curve.g.isNotEmpty() && !RecipeCurve.isNeutral(curve.g)) return false
+        if (curve.b.isNotEmpty() && !RecipeCurve.isNeutral(curve.b)) return false
         // 彩度/自然な彩度（画素残差）は非中立なら不成立。
         val c = recipe.develop.color
         if (c.vibrance != 0.0 || c.saturation != 0.0) return false

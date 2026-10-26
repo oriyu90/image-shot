@@ -68,9 +68,15 @@ enum class EditEventKind(
     ),
 
     /**
-     * トーンカーブ（全体/master カーブのみ）。
-     * payload 形状 v1: `{"curve":{"rgb":[[x,y]...]},"op":...}`。
-     * R/G/B チャンネル別カーブは M1 では実装しない（保存形式だけ存在・適用対象外、RESERVED）。
+     * トーンカーブ（全体/master + R/G/B チャンネル）。
+     * payload 形状 v1: `{"curve":{"ch"?:"r"|"g"|"b","rgb":[[x,y]...],"r"?:[...],"g"?:[...],
+     * "b"?:[...]},"op":...}`。
+     * - `rgb` は必須（全体/master の正規化済み制御点）。`r/g/b` は非空のときのみ収める。
+     * - `ch` は当該イベントで編集したチャンネル（master 編集・状態復帰系〔undo/redo の
+     *   フォールバック〕では省略。履歴表示用の補助メタデータであり、適用は curve 全量で行う）。
+     * - PR-28a から R/G/B チャンネル別カーブの**適用**を開始（master 直後・sRGB 表示値ドメイン・
+     *   空と恒等点列は恒等 short-circuit）。PR-23 までの「保存形式だけ存在・適用対象外」（RESERVED）
+     *   を解消。schemaVersion は v1 のまま（キー追加のみ・旧行は rgb のみで可逆に読める）。
      */
     CURVE(
         "curve",

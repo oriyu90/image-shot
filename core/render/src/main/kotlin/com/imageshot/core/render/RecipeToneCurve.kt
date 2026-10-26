@@ -21,10 +21,12 @@ import kotlin.math.roundToInt
  *   （境界で 0 → 連続・単調を保持、対側は恒等）。
  * - 露出・温度のみ線形光量ドメインで掛ける（sRGB ← -> 線形 変換を含む）。
  * - 彩度・自然な彩度（Vibrance）のみ画素ごとの残差演算（LUT化不能）。
- * - トーンカーブ（全体/master、[RecipeCurve]）: スライダー写像後の sRGB 表示値ドメインで
- *   R/G/B 等量に適用する（= グレー軸を歪めない単調再写像）。中立カーブは
- *   恒等 short-circuit（量子化ドリフトを作らない）。R/G/B チャンネル別カーブは M1 対応外
- *   （読まない・警告対象）。ディテール/局所マスク/ジオメトリは本クラスには存在しない。
+ * - トーンカーブ: スライダー写像後の sRGB 表示値ドメインで適用する。
+ *   master（全体）カーブは R/G/B 等量に適用する（グレー軸を歪めない単調再写像）。
+ *   R/G/B チャンネル別カーブは PR-28a から適用する（master の直接後・各チャンネルに独立適用）。
+ *   いずれも中立カーブは恒等 short-circuit（量子化ドリフトを作らない）。不正形（正規化失敗）
+ *   は恒等に落とす（警告側は通知する）。画質（色再現）の定量評価は golden ΔE（device 実測）
+ *   まで行わない — 本クラスの KDoc は式設計を明示する。ディテール/局所マスク/ジオメトリは本クラスには存在しない。
  *
  * パイプライン順（RecipeDevelopApplier の正本と同一）:
  *   sRGB→線形 → 露出 → 温度利得 → tint利得（両者の積を合成して1回掛ける） → 黒レベル →
@@ -110,6 +112,8 @@ object RecipeToneCurve {
     /**
      * チャンネル LUT（R[0..255], G, B を 768 要素に連結）を構築する。
      * 展開後の値は sRGB 表示値 0..255 の整数。
+     * LUT にトーン + master カーブ + R/G/B チャンネルカーブを合成する
+     * （スライダー → master → チャンネルの順・恒等カーブ short-circuit は量子化ドリフトを作らない）。
      */
     fun buildChannelLuts(develop: EditRecipe.DevelopParams): IntArray {
         val tone = develop.tone
@@ -134,6 +138,25 @@ object RecipeToneCurve {
             else -> RecipeCurve.normalized(develop.curve.rgb) // 不正形は恒等に落とす（警告側は通知する）。
         }
 
+        // R/G/B チャンネルカーブ（PR-28a）: master の直接後・sRGB 表示値ドメインで
+        // 各チャンネルに独立適用する。空または中立なら null = 恒等 short-circuit
+        // （master と同一規約。恒等でない有効カーブのみ評価する）。不正形は恒等に落とす
+        // （master と同一規約・警告側は通知する）。
+        // master-only レシピ（全チャンネル null）では以降の評価を一切追加しないため、
+        // 既存 golden ケース（bit 決定論）の計算順序・値は不変（PR-28a 保全契約）。
+        val channelCurves: List<List<List<Double>>?> = run {
+            fun curveOf(points: List<List<Double>>): List<List<Double>>? = when {
+                points.isEmpty() -> null
+                RecipeCurve.isNeutral(points) -> null
+                else -> RecipeCurve.normalized(points)
+            }
+            listOf(
+                curveOf(develop.curve.r),
+                curveOf(develop.curve.g),
+                curveOf(develop.curve.b),
+            )
+        }
+
         val lut = IntArray(768)
         for (v in 0..255) {
             val linear = srgbToLinear(v / 255.0) * exScale
@@ -147,6 +170,8 @@ object RecipeToneCurve {
                 l = l.coerceIn(0.0, 1.0)
                 var display = linearToSrgb(l)
                 if (curvePoints != null) display = RecipeCurve.evaluate(curvePoints, display)
+                val channelCurve = channelCurves[ch]
+                if (channelCurve != null) display = RecipeCurve.evaluate(channelCurve, display)
                 lut[ch * 256 + v] = (display.coerceIn(0.0, 1.0) * 255.0).roundToInt().coerceIn(0, 255)
             }
         }

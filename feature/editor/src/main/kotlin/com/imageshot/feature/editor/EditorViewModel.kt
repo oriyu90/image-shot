@@ -62,13 +62,26 @@ class EditorViewModel(
 
     data class HistoryRow(val revisionNo: Long, val label: String, val committedAt: Long)
 
+    /**
+     * カーブ編集の対象チャンネル（chips の正本・PR-28a）。
+     * [eventKey] は EditStore.commitCurve の editedChannel / payload `ch`（master は省略=null）。
+     */
+    enum class CurveChannel(val eventKey: String?, val labelRes: Int) {
+        MASTER(null, EditorR.string.editor_curve_channel_master),
+        RED("r", EditorR.string.editor_curve_channel_r),
+        GREEN("g", EditorR.string.editor_curve_channel_g),
+        BLUE("b", EditorR.string.editor_curve_channel_b),
+    }
+
     data class EditorState(
         val assetId: String,
         val asset: Asset?,
         /** ドラッグ中は当該スライダーのみ一時値が上書きされる（DB には影響しない）。 */
         val sliders: List<SliderBind> = AdjustmentId.entries.map { SliderBind(it, it.default) },
-        /** master カーブ制御点（正規化済み）。ドラッグ中は一時値が上書きされる。 */
-        val curvePoints: List<List<Double>> = EditNodeSpecs.CURVE_NEUTRAL_RGB,
+        /** カーブ（master+R/G/B チャンネル、正規化済み）。ドラッグ中は選択チャンネルのみ一時値が上書きされる。 */
+        val curve: EditRecipe.Curve = EditRecipe.Curve(),
+        /** 選択中のカーブチャンネル（chips・編集対象の正本。未選択=master）。 */
+        val curveChannel: CurveChannel = CurveChannel.MASTER,
         /** ジオメトリ（回転/反転/クロップ）の確定済み絶対状態。 */
         val geometry: EditRecipe.GeometryParams = EditRecipe.GeometryParams(),
         val history: List<HistoryRow> = emptyList(),
@@ -98,8 +111,13 @@ class EditorViewModel(
     private val assetFlow = MutableStateFlow<Asset?>(null)
     private val recipe = MutableStateFlow<EditRecipe?>(null)
     private val transient = MutableStateFlow<Map<AdjustmentId, Double>>(emptyMap())
-    /** master カーブのドラッグ中一時値（正規化済み）。確定でクリア。 */
-    private val transientCurve = MutableStateFlow<List<List<Double>>?>(null)
+    /**
+     * カーブのドラッグ中一時値（選択チャンネルのみ差し替えた全量・正規化済み）。確定でクリア。
+     * master のみ / チャンネルのいずれの編集でもこの単一フローを使い、差し替え点だけが違う。
+     */
+    private val transientCurve = MutableStateFlow<EditRecipe.Curve?>(null)
+    /** 選択中のカーブチャンネル（chips・UI セッション状態。DB には保存しない）。 */
+    private val selectedCurveChannel = MutableStateFlow(CurveChannel.MASTER)
     private val history = MutableStateFlow<List<HistoryRow>>(emptyList())
     private val canUndo = MutableStateFlow(false)
     private val canRedo = MutableStateFlow(false)
@@ -160,7 +178,8 @@ class EditorViewModel(
             assetId = assetId,
             asset = asset,
             sliders = projection.sliders,
-            curvePoints = projection.curvePoints,
+            curve = projection.curve,
+            curveChannel = projection.curveChannel,
             geometry = projection.geometry,
             history = rows,
             canUndo = session.canUndo,
@@ -237,23 +256,34 @@ class EditorViewModel(
     }
 
     /**
-     * master カーブ: ドラッグ中の一時更新（DRAFT 描画、DB には触れない）。
+     * カーブ: ドラッグ中の一時更新（選択チャンネルのみを差し替えた全量で DRAFT 描画、DB には触れない）。
      * 正規化できない入力は無視する（UI 側に立たせる・既定値へ落とさない）。
      */
     fun onCurvePreview(points: List<List<Double>>) {
         dragging.value = true
         val normalized = EditNodeSpecs.normalizeCurve(points) ?: return
-        transientCurve.value = normalized
+        transientCurve.value = curveOverrideForSelection(normalized)
         val now = System.currentTimeMillis()
         if (now - lastDraftAt >= DRAFT_INTERVAL_MS) {
             lastDraftAt = now
-            scheduleRender(RenderTarget.PREVIEW, RenderRequest.Quality.DRAFT, draftRecipe(normalized))
+            scheduleRender(RenderTarget.PREVIEW, RenderRequest.Quality.DRAFT, draftRecipe())
+        }
+    }
+
+    /** 選択チャンネルのみを差し替えたカーブ全量（一時値 / 確定値の共通部）。 */
+    private fun curveOverrideForSelection(normalized: List<List<Double>>): EditRecipe.Curve {
+        val base = recipe.value?.develop?.curve ?: EditRecipe.Curve()
+        return when (selectedCurveChannel.value) {
+            CurveChannel.MASTER -> base.copy(rgb = normalized)
+            CurveChannel.RED -> base.copy(r = normalized)
+            CurveChannel.GREEN -> base.copy(g = normalized)
+            CurveChannel.BLUE -> base.copy(b = normalized)
         }
     }
 
     /**
-     * master カーブ: 指を離した時点で絶対状態イベントを確定（EditStore.commitCurve）。
-     * 確定済み点列と同一（実質無変化）の場合はイベントを作らない。
+     * カーブ: 指を離した時点で絶対状態イベントを確定（EditStore.commitCurve・カーブ全量）。
+     * 確定済みカーブと同一（実質無変化）の場合はイベントを作らない。
      */
     fun onCurveCommit(points: List<List<Double>>) {
         dragging.value = false
@@ -266,29 +296,43 @@ class EditorViewModel(
                 return@launch
             }
             val base = recipe.value
-            val current = base?.develop?.curve?.rgb
-            if (current != null && current == normalized) {
+            val target = curveOverrideForSelection(normalized)
+            if (base?.develop?.curve == target) {
                 transientCurve.value = null
                 scheduleRender(RenderTarget.PREVIEW, RenderRequest.Quality.PREVIEW, base)
                 return@launch
             }
             commitToStore("curve") { docId ->
-                editStore.commitCurve(docId, committedRevision, normalized)
+                editStore.commitCurve(docId, committedRevision, target, selectedCurveChannel.value.eventKey)
             }
         }
     }
 
-    /** master カーブを中立（y=x）へ戻す。確定済みがすでに中立ならイベントを作らない。 */
+    /** 選択中カーブチャンネルを中立へ戻す。master は中立点列、チャンネルは未編集（空）へ。
+     *  確定済みがすでに中立ならイベントを作らない。 */
     fun onCurveReset() {
         dragging.value = false
         transientCurve.value = null
-        if (EditNodeSpecs.isNeutralCurve(recipe.value?.develop?.curve?.rgb ?: EditNodeSpecs.CURVE_NEUTRAL_RGB)) {
+        val channel = selectedCurveChannel.value
+        val current = recipe.value?.develop?.curve ?: EditRecipe.Curve()
+        val target = when (channel) {
+            CurveChannel.MASTER -> current.copy(rgb = EditNodeSpecs.CURVE_NEUTRAL_RGB)
+            CurveChannel.RED -> current.copy(r = emptyList())
+            CurveChannel.GREEN -> current.copy(g = emptyList())
+            CurveChannel.BLUE -> current.copy(b = emptyList())
+        }
+        if (current == target) {
             scheduleRender(RenderTarget.PREVIEW, RenderRequest.Quality.PREVIEW, recipe.value ?: return)
             return
         }
         commitToStore("curve") { docId ->
-            editStore.commitCurve(docId, committedRevision, EditNodeSpecs.CURVE_NEUTRAL_RGB)
+            editStore.commitCurve(docId, committedRevision, target, channel.eventKey)
         }
+    }
+
+    /** カーブチャンネル chips の選択（UI 状態・イベントは作らない）。 */
+    fun onCurveChannelSelect(channel: CurveChannel) {
+        selectedCurveChannel.value = channel
     }
 
     /** ジオメトリ: 90°単位の回転（+1 = 時計回り, -1 = 反時計回り）。 */
@@ -361,7 +405,9 @@ class EditorViewModel(
     /** 下部パネルへの一次投影（スライダー値・カーブ・ジオメトリ。combine 段数の集約のため導入）。 */
     private data class PanelProjection(
         val sliders: List<SliderBind>,
-        val curvePoints: List<List<Double>>,
+        /** 選択チャンネルの一時値を差し替えた後のカーブ全量。 */
+        val curve: EditRecipe.Curve,
+        val curveChannel: CurveChannel,
         val geometry: EditRecipe.GeometryParams,
     )
 
@@ -369,13 +415,15 @@ class EditorViewModel(
         recipe.asStateFlow(),
         transient.asStateFlow(),
         transientCurve.asStateFlow(),
-    ) { base, overrides, curveOverride ->
+        selectedCurveChannel.asStateFlow(),
+    ) { base, overrides, curveOverride, curveChannel ->
         val effective = base ?: defaultRecipe(null)
         PanelProjection(
             sliders = AdjustmentId.entries.map { id ->
                 SliderBind(id, overrides[id] ?: id.sliderValueOf(effective))
             },
-            curvePoints = curveOverride ?: effective.develop.curve.rgb.ifEmpty { EditNodeSpecs.CURVE_NEUTRAL_RGB },
+            curve = curveOverride ?: effective.develop.curve,
+            curveChannel = curveChannel,
             geometry = effective.geometry,
         )
     }
@@ -513,15 +561,12 @@ class EditorViewModel(
         }
     }
 
-    /** 一時値を仮レシピへ合成（DB には触れない）。カーブ一時値も同様に差し替える。 */
-    private fun draftRecipe(curveOverride: List<List<Double>>? = transientCurve.value): EditRecipe {
+    /** 一時値を仮レシピへ合成（DB には触れない）。カーブ一時値（選択チャンネル差し替え全量）も同様に差し替える。 */
+    private fun draftRecipe(): EditRecipe {
         val base = recipe.value ?: defaultRecipe(null)
         var out = base
         transient.value.forEach { (id, v) -> out = id.apply(out, v) }
-        val curve = curveOverride?.let { EditNodeSpecs.normalizeCurve(it) }
-        if (curve != null) {
-            out = out.copy(develop = out.develop.copy(curve = out.develop.curve.copy(rgb = curve)))
-        }
+        transientCurve.value?.let { out = out.copy(develop = out.develop.copy(curve = it)) }
         return out
     }
 
@@ -541,12 +586,19 @@ class EditorViewModel(
         }
         val label: String = when {
             item.eventType == EditEventKind.CURVE.id -> {
-                // master カーブの絶対状態を要約表示（payload JSON を UI に露出しない）。
-                strings.get(
-                    EditorR.string.editor_history_curve,
-                    opLabel,
-                    item.curvePoints?.size ?: 0,
-                )
+                // カーブの編集対象チャンネルを含め要約表示（payload JSON は UI に露出しない）。
+                // 点数は当該イベントの payload 状態における編集チャンネル側の制御点数
+                // （ch 未記載=master 編集 / 復帰系フォールバック → rgb の点数。チャンネルが
+                // 未編集化（空）に戻ったときは 0点と表示する）。
+                val channelLabel = strings.get(curveChannelLabelRes(item.curveChannel))
+                val points = when (item.curveChannel) {
+                    null -> item.curve?.rgb?.size
+                    "r" -> item.curve?.r?.size
+                    "g" -> item.curve?.g?.size
+                    "b" -> item.curve?.b?.size
+                    else -> item.curve?.rgb?.size
+                } ?: 0
+                strings.get(EditorR.string.editor_history_curve, opLabel, channelLabel, points)
             }
             item.eventType == EditEventKind.GEOMETRY.id -> {
                 val g = item.geometry
@@ -589,6 +641,14 @@ class EditorViewModel(
             label = label.trim(),
             committedAt = item.committedAt,
         )
+    }
+
+    /** curve 履歴行のチャンネル表示（null=master。未知値は master 表示へ安全側で落とす）。 */
+    private fun curveChannelLabelRes(channel: String?): Int = when (channel) {
+        "r" -> EditorR.string.editor_curve_channel_r
+        "g" -> EditorR.string.editor_curve_channel_g
+        "b" -> EditorR.string.editor_curve_channel_b
+        else -> EditorR.string.editor_curve_channel_master
     }
 
     private enum class RenderTarget { PREVIEW, BEFORE }

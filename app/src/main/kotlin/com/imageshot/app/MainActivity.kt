@@ -85,6 +85,7 @@ class MainActivity : ComponentActivity() {
                             onCurvePreview = { points -> vm.onCurvePreview(points) },
                             onCurveCommit = { points -> vm.onCurveCommit(points) },
                             onCurveReset = vm::onCurveReset,
+                            onCurveChannelSelect = vm::onCurveChannelSelect,
                             onGeometryRotate = vm::onGeometryRotate,
                             onGeometryFlip = vm::onGeometryFlip,
                             onGeometryCrop = vm::onGeometryCrop,
