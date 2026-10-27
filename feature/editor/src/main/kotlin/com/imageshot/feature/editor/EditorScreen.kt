@@ -74,7 +74,10 @@ import com.imageshot.core.model.EditNodeSpecs
 import com.imageshot.core.model.EditRecipe
 import com.imageshot.core.model.MaskSpecs
 import com.imageshot.core.render.RecipeCurve
+import kotlin.math.cos
+import kotlin.math.PI
 import kotlin.math.roundToInt
+import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
@@ -597,7 +600,10 @@ private fun MaskOverlay(
         ) ?: return@Canvas
         val strokeWidth = MASK_STROKE_WIDTH.toPx()
         val handleRadius = MASK_HANDLE_RADIUS.toPx()
-        masks.forEach { node ->
+        masks.forEach { raw ->
+            // レシピ由来の未正規化マスク（破損/将来形式）で Canvas に NaN を渡さない。
+            // 適用側（RecipeMaskApplier）と同じく、正規化できないノードは描画もしない。
+            val node = MaskSpecs.normalize(raw) ?: return@forEach
             val selected = node.maskId == selectedMaskId
             val color = if (selected) EditorPalette.accent else EditorPalette.textSecondary.copy(alpha = 0.45f)
             when (node.maskType) {
@@ -677,27 +683,39 @@ private fun DrawScope.drawRadialMask(
         p[MaskSpecs.KEY_FEATHER] ?: MaskSpecs.DEFAULT_RADIAL_FEATHER,
         MaskSpecs.DEFAULT_RADIAL_FEATHER,
     )
-    rotate(degrees = angleDeg.toFloat(), pivot = Offset(center.x, center.y)) {
-        val topLeft = Offset(center.x - rxPx, center.y - ryPx)
-        val outer = Size(rxPx * 2f, ryPx * 2f)
-        if (selected && feather > 0.0) {
-            val innerScale = (1.0 - feather).toFloat().coerceIn(0f, 1f)
-            val innerRx = rxPx * innerScale
-            val innerRy = ryPx * innerScale
+    // 楕円は **正規化座標空間** で回転させる（core の MaskWeight と同じ定義）。
+    // 画面 px で rotate すると縦横比の分だけシアーし、角度付きマスクの見た目と
+    // 実際の適用範囲・ハンドル位置が一致しない（4:3 等で顕著）。
+    val theta = Math.toRadians(angleDeg)
+    val c = cos(theta)
+    val sn = sin(theta)
+    fun ellipsePath(scale: Double): Path {
+        val path = Path()
+        val steps = 96
+        for (i in 0..steps) {
+            val phi = 2.0 * PI * i / steps
+            val lx = rx * scale * cos(phi)
+            val ly = ry * scale * sin(phi)
+            val nx = cx + lx * c - ly * sn
+            val ny = cy + lx * sn + ly * c
+            val point = MaskOverlayGeometry.toScreen(rect, nx, ny)
+            if (i == 0) path.moveTo(point.x, point.y) else path.lineTo(point.x, point.y)
+        }
+        path.close()
+        return path
+    }
+    if (selected && feather > 0.0) {
+        val innerScale = (1.0 - feather).coerceIn(0.0, 1.0)
+        if (innerScale > 1e-4) {
             val ring = Path().apply {
                 fillType = PathFillType.EvenOdd
-                addOval(Rect(topLeft, outer))
-                addOval(
-                    Rect(
-                        Offset(center.x - innerRx, center.y - innerRy),
-                        Size(innerRx * 2f, innerRy * 2f),
-                    ),
-                )
+                addPath(ellipsePath(1.0))
+                addPath(ellipsePath(innerScale))
             }
             drawPath(ring, color = color.copy(alpha = 0.18f))
         }
-        drawOval(color = color, topLeft = topLeft, size = outer, style = Stroke(width = strokeWidth))
     }
+    drawPath(ellipsePath(1.0), color = color, style = Stroke(width = strokeWidth))
 }
 
 /** brush: 各ストロークを半透明の円で表示（半径は短辺基準＝ core と同一）。 */
@@ -995,6 +1013,19 @@ private fun DetailContent(
         color = EditorPalette.textSecondary,
         modifier = Modifier.padding(top = 4.dp),
     )
+    val asset = state.asset
+    if (asset != null &&
+        asset.width.toLong() * asset.height.toLong() >
+        com.imageshot.core.render.RecipeDetailApplier.DEGRADE_PIXEL_COUNT
+    ) {
+        // 自動降格は preview ではなく export（画素数）で決まるため、事前に明示する。
+        Text(
+            text = stringResource(EditorR.string.editor_detail_light_path_notice),
+            style = MaterialTheme.typography.labelSmall,
+            color = EditorPalette.accent,
+            modifier = Modifier.padding(top = 4.dp),
+        )
+    }
 }
 
 // --------------------------------------------------------------- カーブタブ（master + R/G/B）

@@ -4,7 +4,9 @@ import com.imageshot.core.model.EditNodeSpecs
 import com.imageshot.core.model.EditRecipe
 import com.imageshot.core.model.MaskSpecs
 import java.util.Locale
+import kotlin.math.cos
 import kotlin.math.min
+import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
@@ -157,10 +159,17 @@ internal object MaskHandles {
                 val cy = p[MaskSpecs.KEY_CY] ?: return emptyList()
                 val rx = p[MaskSpecs.KEY_RX] ?: return emptyList()
                 val ry = p[MaskSpecs.KEY_RY] ?: return emptyList()
+                // 回転は **正規化座標空間** で行う（core の MaskWeight と同じ）。
+                // 画面 px で rotate すると縦横比でシアーし、角度付き楕円とハンドルがずれる。
+                val theta = Math.toRadians(
+                    p[MaskSpecs.KEY_ANGLE_DEG]?.takeIf { it.isFinite() } ?: 0.0,
+                )
+                val c = cos(theta)
+                val s = sin(theta)
                 listOf(
                     Handle(Kind.RADIAL_CENTER, cx, cy),
-                    Handle(Kind.RADIAL_RX, cx + rx, cy),
-                    Handle(Kind.RADIAL_RY, cx, cy + ry),
+                    Handle(Kind.RADIAL_RX, cx + rx * c, cy + rx * s),
+                    Handle(Kind.RADIAL_RY, cx - ry * s, cy + ry * c),
                 )
             }
             else -> emptyList()
@@ -201,12 +210,27 @@ internal object MaskHandles {
             Kind.RADIAL_RX -> {
                 if (node.maskType != MaskSpecs.TYPE_RADIAL) return node
                 val cx = params[MaskSpecs.KEY_CX] ?: return node
-                params[MaskSpecs.KEY_RX] = (nx - cx).coerceIn(MIN_RADIAL_HANDLE_RADIUS, MaskSpecs.MAX_RADIAL_RADIUS)
+                val cy = params[MaskSpecs.KEY_CY] ?: return node
+                val theta = Math.toRadians(
+                    params[MaskSpecs.KEY_ANGLE_DEG]?.takeIf { it.isFinite() } ?: 0.0,
+                )
+                // ハンドルは正規化空間で中心 + rx·(cosθ, sinθ) にあるため、
+                // ドラッグ点のローカル x 成分（u 軸への射影）が新しい rx。
+                val rx = (nx - cx) * cos(theta) + (ny - cy) * sin(theta)
+                params[MaskSpecs.KEY_RX] =
+                    rx.coerceIn(MIN_RADIAL_HANDLE_RADIUS, MaskSpecs.MAX_RADIAL_RADIUS)
             }
             Kind.RADIAL_RY -> {
                 if (node.maskType != MaskSpecs.TYPE_RADIAL) return node
+                val cx = params[MaskSpecs.KEY_CX] ?: return node
                 val cy = params[MaskSpecs.KEY_CY] ?: return node
-                params[MaskSpecs.KEY_RY] = (ny - cy).coerceIn(MIN_RADIAL_HANDLE_RADIUS, MaskSpecs.MAX_RADIAL_RADIUS)
+                val theta = Math.toRadians(
+                    params[MaskSpecs.KEY_ANGLE_DEG]?.takeIf { it.isFinite() } ?: 0.0,
+                )
+                // ry ハンドルは中心 + ry·(−sinθ, cosθ)。ドラッグ点の v 軸射影が新しい ry。
+                val ry = -(nx - cx) * sin(theta) + (ny - cy) * cos(theta)
+                params[MaskSpecs.KEY_RY] =
+                    ry.coerceIn(MIN_RADIAL_HANDLE_RADIUS, MaskSpecs.MAX_RADIAL_RADIUS)
             }
         }
         return MaskSpecs.normalize(node.copy(parameters = params)) ?: node

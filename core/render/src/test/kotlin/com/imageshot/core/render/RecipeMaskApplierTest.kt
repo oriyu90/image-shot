@@ -114,6 +114,23 @@ class RecipeMaskApplierTest {
         assertArrayEquals(before, pixels)
     }
 
+    @Test
+    fun mixedValidAndInvalid_appliesNoneToAvoidPartialState() {
+        val pixels = ramp(16, 12)
+        val before = pixels.copyOf()
+        val mixed = listOf(
+            tinyRadial(
+                adjustments = mapOf("develop.tone.exposureEv" to 1.0),
+                id = "valid",
+            ),
+            EditRecipe.MaskNode(maskId = "bad", maskType = "vignette"),
+        )
+        val outcome = RecipeMaskApplier.applyToPixels(pixels, 16, 12, mixed)
+        assertEquals(2, outcome.maskCount)
+        assertEquals(0, outcome.applied)
+        assertArrayEquals(before, pixels)
+    }
+
     // ---------------------------------------------------------------- 適用（w=0 / w=1）
 
     @Test

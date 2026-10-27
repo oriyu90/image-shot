@@ -62,11 +62,65 @@ object MaskWeight {
             out.fill(0f)
             return
         }
+        if (node.maskType == MaskSpecs.TYPE_BRUSH) {
+            // ブラシはストローク数×全画素の O(N·P) を避ける。ストロークごとに
+            // 影響する x 範囲（半径のバウンディングボックス）だけを走査して max を取る。
+            // 値は [weightAtNormalized] と同一（テスト brushRow_matchesWeightAt で固定）。
+            brushRow(node, y, width, height, out, offset)
+            return
+        }
         val py = (y + 0.5) / height.toDouble()
         val n = min(width, out.size - offset)
         for (x in 0 until n) {
             val px = (x + 0.5) / width.toDouble()
             out[offset + x] = weightAtNormalized(node, px, py, width, height)
+        }
+    }
+
+    /**
+     * brush の 1 行分（[offset] から width 要素）。影響範囲外は 0。
+     * 距離は core と同じ「短辺基準の正規化半径 × min(w,h)」の画素距離で評価する。
+     */
+    private fun brushRow(
+        node: EditRecipe.MaskNode,
+        y: Int,
+        width: Int,
+        height: Int,
+        out: FloatArray,
+        offset: Int,
+    ) {
+        val n = min(width, out.size - offset)
+        java.util.Arrays.fill(out, offset, offset + n, 0f)
+        val strokes = node.brushStrokes
+        if (strokes.isEmpty()) return
+        val feather = featherOf(node.parameters, MaskSpecs.DEFAULT_BRUSH_FEATHER)
+        val shortEdge = min(width, height).toDouble()
+        if (shortEdge <= 0.0) return
+        val yPx = y + 0.5
+        for (stroke in strokes) {
+            val radiusNorm = stroke.radius
+            if (!radiusNorm.isFinite() || radiusNorm <= 0.0) continue
+            val opacity = if (stroke.opacity.isFinite()) stroke.opacity.coerceIn(0.0, 1.0) else 0.0
+            if (opacity <= 0.0) continue
+            val radiusPx = radiusNorm * shortEdge
+            val cy = stroke.y * height
+            val dy = yPx - cy
+            if (kotlin.math.abs(dy) >= radiusPx) continue
+            val halfX = sqrt(radiusPx * radiusPx - dy * dy)
+            val cx = stroke.x * width
+            val first = kotlin.math.ceil(cx - halfX - 0.5).toInt().coerceAtLeast(0)
+            val last = kotlin.math.floor(cx + halfX - 0.5).toInt().coerceAtMost(n - 1)
+            if (first > last) continue
+            for (x in first..last) {
+                val dx = (x + 0.5) - cx
+                val d = sqrt(dx * dx + dy * dy) / radiusPx
+                val w = opacity * (1.0 - smoothstep(1.0 - feather, 1.0, d))
+                if (w > 0.0) {
+                    val index = offset + x
+                    val fw = w.toFloat()
+                    if (fw > out[index]) out[index] = fw
+                }
+            }
         }
     }
 

@@ -276,7 +276,10 @@ class LibraryViewModel(
                 val plan = AvailabilitySweep.plan(entries, includeUnavailable = false)
                 if (plan.targets.isEmpty()) return@launch
                 val results = plan.targets.map { entry ->
-                    entry to importRepository.probeAvailability(Uri.parse(entry.sourceUri))
+                    val probe = runCatching {
+                        importRepository.probeAvailability(Uri.parse(entry.sourceUri))
+                    }.getOrElse { UriAccessibility.DISCONNECTED }
+                    entry to probe
                 }
                 val transitions = AvailabilitySweep.transitions(results)
                 if (transitions.isEmpty()) return@launch
@@ -313,7 +316,12 @@ class LibraryViewModel(
             }
             val plan = AvailabilitySweep.plan(entries, includeUnavailable = true)
             val results = plan.targets.map { entry ->
-                entry to importRepository.probeAvailability(Uri.parse(entry.sourceUri))
+                // provider が想定外例外（不正 URI 等）を投げても表示時検査で落とさない。
+                // 判定不能は切断扱い（原画像の存在を誤認しない方向へ倒す）。
+                val probe = runCatching {
+                    importRepository.probeAvailability(Uri.parse(entry.sourceUri))
+                }.getOrElse { UriAccessibility.DISCONNECTED }
+                entry to probe
             }
             val transitions = AvailabilitySweep.transitions(results)
             for (transition in transitions) {

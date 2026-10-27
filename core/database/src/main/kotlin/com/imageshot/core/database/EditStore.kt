@@ -10,6 +10,7 @@ import com.imageshot.core.model.EditRecipe
 import com.imageshot.core.model.ErrorCode
 import com.imageshot.core.model.ImageOpResult
 import com.imageshot.core.model.MaskSpecs
+import com.imageshot.core.model.PAYLOAD_SHAPE_SCHEMA_VERSION_1
 import com.imageshot.core.model.RecipeParameterEdit
 import com.imageshot.core.model.RecipeSchema
 import java.security.MessageDigest
@@ -620,7 +621,12 @@ class EditStore(
                         }
                     }
                     EditEventKind.LOCAL.id -> {
-                        val masks = parseMasksPayload(payload)
+                        // 未知の payload schema 版は v1 の意味で解釈しない（PRESERVED_ONLY）。
+                        val masks = if (rev.payloadSchemaVersion == PAYLOAD_SHAPE_SCHEMA_VERSION_1) {
+                            parseMasksPayload(payload)
+                        } else {
+                            null
+                        }
                         when {
                             masks == null -> preservedOnly++
                             rev.revisionNo > baseRevision -> {

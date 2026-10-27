@@ -1,8 +1,10 @@
 package com.imageshot.app
 
+import android.graphics.Color
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -34,9 +36,14 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Android 16 の強制 edge-to-edge（targetSdk 36）に対応。ステータス/ナビゲーションバーの
-        // アイコン色はこの API が自動で面の明暗に追従させる（WindowCompat 版は使わない）。
-        enableEdgeToEdge()
+        // Android 16 の強制 edge-to-edge（targetSdk 36）に対応。
+        // 本アプリは ImageShotTheme が常にダーク固定のため、端末がライトモードでも
+        // ステータス/ナビゲーションバーのアイコンは「明るいアイコン」に固定する。
+        // auto のままだとライトモード時に暗色アイコンとなり、暗いアプリ背景上で視認できない。
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
+        )
         val container = (application as ImageShotApplication).container
 
         setContent {

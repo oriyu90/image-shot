@@ -16,7 +16,8 @@ import com.imageshot.core.model.MaskSpecs
  *   develop と同一の共有画素適用器（[RecipeDevelopApplier.DevelopStage]）で per-pixel 適用する。
  * - ブレンド: `out = base + (adj − base) * w`（8bit 各チャネル・四捨五入・0..255 クランプ・
  *   アルファは base のまま）。`w <= 0` は画素を変更せず、`w >= 1` は adj をそのまま採用する。
- * - 正規化できないマスクは適用せずスキップし、[Outcome.maskCount] と [Outcome.applied] の差で
+ * - マスク列の 1 件でも正規化できない場合（未知種別・未知キー・範囲外・重複 ID・上限超過）は
+ *   1 件も適用しない（部分適用を作らない）。[Outcome.maskCount] と [Outcome.applied] の差で
  *   明示する（無通知に捨てない = ADR-014。警告文言は
  *   [RecipeDevelopApplier.unappliedNodeWarnings] が担当）。
  *
@@ -77,9 +78,12 @@ object RecipeMaskApplier {
         if (total > pixels.size.toLong()) return Outcome(applied = 0, maskCount = masks.size)
 
         val cacheable = !forceBanded && total <= MaskWeightCache.MAX_CACHED_PIXELS
+        // 全件正規化できない場合は 1 件も適用しない（部分適用を作らない・
+        // [RecipeDevelopApplier.unappliedNodeWarnings] の「preserved only」表示と一致）。
+        val normalizedMasks = MaskSpecs.normalizeAll(masks)
+            ?: return Outcome(applied = 0, maskCount = masks.size)
         var applied = 0
-        for (node in masks) {
-            val normalized = MaskSpecs.normalize(node) ?: continue
+        for (normalized in normalizedMasks) {
             if (normalized.adjustments.isEmpty()) {
                 // 調整値が無いマスクは恒等（重みを計算しても out == base）。
                 applied++

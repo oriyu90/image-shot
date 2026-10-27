@@ -1,6 +1,7 @@
 package com.imageshot.core.render
 
 import com.imageshot.core.model.EditRecipe
+import com.imageshot.core.model.MaskSpecs
 import kotlin.math.abs
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -297,4 +298,31 @@ class MaskWeightTest {
             }
         }
     }
+    @Test
+    fun brushRow_matchesWeightAt() {
+        val node = EditRecipe.MaskNode(
+            maskId = "b",
+            maskType = MaskSpecs.TYPE_BRUSH,
+            parameters = mapOf(MaskSpecs.KEY_FEATHER to 0.3),
+            brushStrokes = listOf(
+                EditRecipe.BrushStroke(0.2, 0.3, 0.15, 1.0),
+                EditRecipe.BrushStroke(0.7, 0.6, 0.25, 0.6),
+                EditRecipe.BrushStroke(0.5, 0.5, 0.05, 0.9),
+            ),
+        )
+        val w = 40
+        val h = 30
+        val row = FloatArray(w)
+        for (y in 0 until h) {
+            MaskWeight.weightRow(node, y, w, h, row)
+            for (x in 0 until w) {
+                val expected = MaskWeight.weightAt(node, x, y, w, h)
+                assertTrue(
+                    "mismatch at ($x,$y): $expected vs ${row[x]}",
+                    abs(expected - row[x]) <= 1e-6f,
+                )
+            }
+        }
+    }
+
 }

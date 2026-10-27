@@ -188,6 +188,47 @@ class MaskEditingTest {
     }
 
     @Test
+    fun handlesOf_radial_followsNormalizedRotation() {
+        val base = MaskDraft.create(MaskSpecs.TYPE_RADIAL, "mask-radial")!!
+        val node = base.copy(
+            parameters = base.parameters + (MaskSpecs.KEY_ANGLE_DEG to 90.0),
+        )
+        val handles = MaskHandles.handlesOf(node)
+        // angle=90: rx 軸 = (0,1), ry 軸 = (-1,0)。半径 0.3。
+        assertEquals(0.5, handles[1].x, 1e-9)
+        assertEquals(0.8, handles[1].y, 1e-9)
+        assertEquals(0.2, handles[2].x, 1e-9)
+        assertEquals(0.5, handles[2].y, 1e-9)
+    }
+
+    @Test
+    fun move_radialHandles_projectOntoRotatedAxes() {
+        val base = MaskDraft.create(MaskSpecs.TYPE_RADIAL, "mask-radial")!!
+        val node = base.copy(
+            parameters = base.parameters + (MaskSpecs.KEY_ANGLE_DEG to 90.0),
+        )
+        val rxMoved = MaskHandles.move(node, MaskHandles.Kind.RADIAL_RX, 0.5, 0.9)
+        assertEquals(0.4, rxMoved.parameters.getValue(MaskSpecs.KEY_RX), 1e-9)
+        assertEquals(0.3, rxMoved.parameters.getValue(MaskSpecs.KEY_RY), 1e-9)
+
+        val ryMoved = MaskHandles.move(node, MaskHandles.Kind.RADIAL_RY, 0.1, 0.5)
+        assertEquals(0.3, ryMoved.parameters.getValue(MaskSpecs.KEY_RX), 1e-9)
+        assertEquals(0.4, ryMoved.parameters.getValue(MaskSpecs.KEY_RY), 1e-9)
+    }
+
+    @Test
+    fun move_radialHandle_roundTripsAtArbitraryAngle() {
+        val base = MaskDraft.create(MaskSpecs.TYPE_RADIAL, "mask-radial")!!
+        val node = base.copy(
+            parameters = base.parameters + (MaskSpecs.KEY_ANGLE_DEG to 30.0),
+        )
+        val rxHandle = MaskHandles.handlesOf(node).first { it.kind == MaskHandles.Kind.RADIAL_RX }
+        val moved = MaskHandles.move(node, MaskHandles.Kind.RADIAL_RX, rxHandle.x, rxHandle.y)
+        // ハンドル位置へ戻しても rx は変わらない（写像と逆写像の一致）。
+        assertEquals(0.3, moved.parameters.getValue(MaskSpecs.KEY_RX), 1e-6)
+    }
+
+    @Test
     fun move_kindMismatch_isNoOp() {
         val node = MaskDraft.create(MaskSpecs.TYPE_LINEAR, "mask-linear")!!
         assertEquals(node, MaskHandles.move(node, MaskHandles.Kind.RADIAL_CENTER, 0.1, 0.1))

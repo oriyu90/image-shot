@@ -152,7 +152,7 @@ object MaskSpecs {
      * マスクノードを正規化する。正規化できない入力は null（既定値へ落とさない）。
      *
      * 検証:
-     * - maskId は空でなく [MAX_MASK_ID_LENGTH] 以下、maskType は [MASK_TYPES]、version >= 1。
+     * - maskId は空でなく [MAX_MASK_ID_LENGTH] 以下、maskType は [MASK_TYPES]、version は 1 のみ。
      * - parameters: 未知キー・非有限・範囲外は失敗。必須キー欠落は失敗。feather/angleDeg は
      *   既定補完（不足時）。順序は [paramKeys] の順へ正準化。
      * - linear: x0..y1 ∈ [0,1]・A!=B（[MIN_LINEAR_LENGTH_SQ]）。
@@ -165,7 +165,9 @@ object MaskSpecs {
         val maskId = node.maskId
         if (maskId.isBlank() || maskId.length > MAX_MASK_ID_LENGTH) return null
         if (node.maskType !in MASK_TYPES) return null
-        if (node.version < 1) return null
+        // 本実装が解釈できるのは version 1 のみ。将来 version のマスクを
+        // v1 の意味で適用すると誤表示になるため、未知版は PRESERVED_ONLY 側へ倒す。
+        if (node.version != 1) return null
         val parameters = normalizeParameters(node.maskType, node.parameters) ?: return null
         val adjustments = normalizeAdjustments(node.adjustments) ?: return null
         val strokes = normalizeStrokes(node.maskType, node.brushStrokes) ?: return null

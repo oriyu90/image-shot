@@ -27,6 +27,7 @@
     <string name="editor_detail_title">ディテール（シャープ/ノイズ低減）</string>
     <string name="editor_detail_notice">シャープは輪郭の局所コントラストを強調し、輝度ノイズ低減はざらつきを滑らかにします（色差は保持）。</string>
     <string name="editor_detail_help">0..100 の強度。適用順は「develop → ディテール → 書き出しリサイズ」でプレビューと書き出しが同一です。</string>
+    <string name="editor_detail_light_path_notice">この画像は 12MP を超えます。12MP を超える書き出しでは、ディテール処理が軽量経路（シャープのみ・輝度NRなし）へ自動降格します（プレビューは通常経路）。</string>
     <string name="editor_detail_degraded_notice">処理を軽くしたため自動降格しました（シャープのみ適用・輝度ノイズ低減は省略）</string>
     <string name="editor_local_title">局部補正（マスク）</string>
 

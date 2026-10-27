@@ -155,6 +155,8 @@ class MaskSpecsTest {
         assertNull(MaskSpecs.normalize(linear().copy(maskId = " ")))
         assertNull(MaskSpecs.normalize(linear().copy(maskType = "vignette")))
         assertNull(MaskSpecs.normalize(linear().copy(version = 0)))
+        // 未知の将来版は v1 の意味で適用しない（誤表示より PRESERVED_ONLY を選ぶ）。
+        assertNull(MaskSpecs.normalize(linear().copy(version = 2)))
     }
 
     // ---------------------------------------------------------------- adjustments

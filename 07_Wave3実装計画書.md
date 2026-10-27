@@ -505,6 +505,26 @@ export 側は issueNotes に記録）。UI 警告の全面結線は ADR-014 の�
 3. radial の角度は表示 -180..180 / 保存 [0,360) の正準化を VM で行う（core の
    `EditNodeSpecs.canonicalAngleDeg` と同一規則。UI 側は `MaskSlider` で往復変換）。
 
+### 13.3 PR-28/29/30 の品質精査と修正（2026-10-27）
+
+PR-28b/c・29a/b/c・30 の実装に対し、メモリ安全性・クラッシュ安全性・安定性・GUI 完全性・
+設定整合・互換・表示正確性の 7 観点で静的監査と実機再確認を行った。詳細・再現条件・残置は
+**`10_品質精査と修正記録.md`** を正本とする。修正した主なもの:
+
+1. **ラジアル overlay/ハンドルの座標系不一致**（4:3 で角度付き楕円がずれる）→ 正規化空間回転 + 射影に修正。
+2. **ライトモード時のバーアイコン視認不能**（常時ダーク UI に auto の暗色アイコン）→ `SystemBarStyle.dark` 固定。
+3. **表示時 availability 検査の未捕捉例外** → `runCatching` で DISCONNECTED へ。
+4. **未知 mask version / LOCAL payload version の v1 適用** → 拒否（PRESERVED_ONLY）。
+5. **不正マスク混在時の部分適用** → 全件正規化失敗なら 1 件も適用しない。
+6. **ブラシ重みの O(ストローク×画素)** → ストローク bbox 行計算（等価テスト付き）。
+7. ディテール降格の事前明示・overlay の不正マスク非描画・重複代入の整理。
+
+検証: unit 325/325・lint error 0・assembleRelease 緑・golden 8/8（既存 6 ビット一致）・
+kill 30/30・R8 スモーク緑。残置は 48MP/4GB（PR-26 fixture）、数値ダイアログ IME、
+ズーム中ドラッグ・折りたたみ等の実機未検証（10 §3）。
+
+---
+
 ## 14. PR-30: G2 availability・G3 inset・F3 adaptive
 
 - **既存計画継承**: 06 旧 PR-11/12/13 の再編成。
