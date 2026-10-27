@@ -22,6 +22,7 @@
 | `bff70c1` | **PR-30（G2 availability・G3 inset・F3 adaptive）** |
 | `fe90992` | **PR-29a/29b（mask payload/JVM/Store/renderer・golden 8 ケース化）** |
 | `e7c7231` | **PR-29c（マスク UI/overlay）** |
+| `15e7928` | **品質精査と修正（P1×3・P2×5・P3×1）**（詳細 10） |
 
 ### 1.2 PR-28a（D1 per-channel curves）実施結果 — **commit `1355191`・2026-10-26**
 
