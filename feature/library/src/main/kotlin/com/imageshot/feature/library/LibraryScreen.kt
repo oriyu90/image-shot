@@ -136,7 +136,7 @@ fun LibraryScreen(
     // 再関連付け導線（セル/詳細ペインの双方から同じ経路を使う）。
     val requestRelink: (Asset) -> Unit = { asset ->
         relinkTarget = asset
-        safRelinkLauncher.launch(arrayOf("image/*"))
+        safRelinkLauncher.launch(SAF_PICK_MIME_TYPES)
     }
 
     // 表示・再表示（編集から戻る等）のたびに走る。回転では configChanges により再実行されない。
@@ -172,7 +172,7 @@ fun LibraryScreen(
                                 PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
                             )
                         },
-                        onOpenFiles = { safFilesLauncher.launch(arrayOf("image/*")) },
+                        onOpenFiles = { safFilesLauncher.launch(SAF_PICK_MIME_TYPES) },
                         onOpenTree = { safTreeLauncher.launch(null) },
                         onQueryChange = viewModel::setSearchQuery,
                         onSelectSort = viewModel::setSortOrder,
@@ -202,7 +202,7 @@ fun LibraryScreen(
                             PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
                         )
                     },
-                    onOpenFiles = { safFilesLauncher.launch(arrayOf("image/*")) },
+                    onOpenFiles = { safFilesLauncher.launch(SAF_PICK_MIME_TYPES) },
                     onOpenTree = { safTreeLauncher.launch(null) },
                     onQueryChange = viewModel::setSearchQuery,
                     onSelectSort = viewModel::setSortOrder,
@@ -548,6 +548,8 @@ private fun AssetCell(
             maxLines = 1,
         )
     }
+
+
 }
 
 private fun formatDateTime(epochMs: Long): String =
@@ -562,3 +564,11 @@ private val WIDE_TWO_PANE_MIN_WIDTH = 840.dp
 
 /** F3: 2ペイン時の詳細ペイン幅（プレビューが読める最小限・一覧を圧迫しない）。 */
 private val DETAIL_PANE_WIDTH = 360.dp
+
+/**
+ * SAF の MIME フィルタ。image 系 MIME だけだと ARW 等の RAW が provider 側で
+ * `application/octet-stream` になり一覧に出ない（実機/エミュレータで再現）。
+ * RAW を選択して「非対応候補」として明示するため、任意ファイルを選べるワイルドカードにする。
+ * 非画像・非対応は取り込み時に ImportSniffer/register が拒否する（DB 非登録）。
+ */
+private val SAF_PICK_MIME_TYPES = arrayOf("*/*")

@@ -4,4 +4,5 @@
     <color name="editor_surface">#1A1A1A</color>
     <color name="app_background">#141414</color>
     <color name="text_primary">#EDEDED</color>
+    <color name="ic_launcher_background">#000000</color>
 </resources>

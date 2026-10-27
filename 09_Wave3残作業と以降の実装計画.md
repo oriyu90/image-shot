@@ -112,6 +112,19 @@ R8 release スモーク（masks 3/8・FATAL 0）/ `ui_strings_check` 違反 0。
 残置: 48MP/4GB（PR-26 fixture）・数値ダイアログ IME・ズーム中ドラッグ・折りたたみ・
 URI 失効の実機観察・マスク UI の調整 5/10 パス・履歴二段スクロール（10 §3）。
 
+### 1.10 Sony ARW 検証とアプリアイコン（2026-10-27）
+
+| 項目 | 結果 |
+|---|---|
+| 入力 | `ARW (sony)/DSC00001.ARW`・`DSC00003.ARW`（SONY ILCE-6000・各約25MB）/ `アイコン.ico` 256×256 |
+| ARW 判定 | 先頭 `II*\0` → `TIFF_FAMILY / supported=false`。`register` は **DB 登録・デコード前に `UNSUPPORTED_CODEC` で拒否**（クラッシュ/OOM 経路なし） |
+| 文言 | `ImportSniffer.rawDisplayName` で「Sony ARW（RAW 現像は未対応）」を明示（汎用 TIFF 文言を解消）。unit 追加 |
+| 実行検証 | **エミュレータ（API36.1）で実施**: 修正前 `image/*` では ARW が一覧に出ず選択不能 → `*/*` + RAW 拡張子候補へ修正後、`DSC00001.ARW` を選択し `UNSUPPORTED_CODEC 非対応候補: Sony ARW（RAW 現像は未対応）` / `0 / 1 件` / DB assets=0 / アプリ FATAL 0 を確認。最終文言（実ファイル名）とフォルダー取り込みは SystemUI ANR で再確認待ち |
+| アイコン | ico から legacy/round/adaptive(v26)/monochrome(v33) を生成し Manifest に設定。`aapt2 dump badging`・APK 抽出画像・**起動スプラッシュでの表示**を確認。ランチャーの適応マスク/テーマは未確認 |
+| RAW 対応 | **未実装（仕様どおり）**。Sony ARW は非 DNG のため LibRaw 統合（ADR-027）と PR-25 が必要。本ターンでは実装しない |
+
+正本: `11_Sony_ARW検証とアプリアイコン.md`。
+
 ### 1.3 実機・証跡の現状
 
 - **TB710FU（`HA2EPG4J`・API 36）**: アプリ DB に doc `currentRevision=5`・履歴 5 件（master 3 点(0.4605,0.8941)+R 未編集・g/b 空）が残留 — **PR-28b の実機検証はこの状態を起点にできる**（同 doc 上で r6 以降を追加し undo/redo の延長検証が可能・新 import による別 doc 検証も可）

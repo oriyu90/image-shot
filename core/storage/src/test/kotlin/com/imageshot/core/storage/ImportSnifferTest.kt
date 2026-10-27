@@ -1,7 +1,11 @@
 package com.imageshot.core.storage
 
+import com.imageshot.core.model.ImportProbe
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assume.assumeTrue
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -96,6 +100,59 @@ class ImportSnifferTest {
         assertTrue(ImportSniffer.isImageMime("image/heic"))
         assertFalse(ImportSniffer.isImageMime("video/mp4"))
         assertFalse(ImportSniffer.isImageMime(null))
+    }
+
+    @Test
+    fun `RAW 拡張子は機種名付きで表示できる`() {
+        assertEquals("Sony ARW", ImportSniffer.rawDisplayName("DSC00001.ARW"))
+        assertEquals("DNG", ImportSniffer.rawDisplayName("shot.dng"))
+        assertEquals("Nikon NEF", ImportSniffer.rawDisplayName("x.NEF"))
+        assertNull(ImportSniffer.rawDisplayName("photo.jpg"))
+        assertNull(ImportSniffer.rawDisplayName(null))
+    }
+
+    @Test
+    fun `実 ARW ヘッダーは TIFF 非対応候補として拒否される`() {
+        var dir: File? = File(System.getProperty("user.dir"))
+        var arw: File? = null
+        repeat(4) {
+            val candidate = File(dir, "ARW (sony)/DSC00001.ARW")
+            if (candidate.isFile) arw = candidate
+            dir = dir?.parentFile
+        }
+        assumeTrue("ARW fixture が無い環境ではスキップ", arw != null)
+        val head = arw!!.inputStream().use { it.readNBytes(64) }
+        val outcome = ImportSniffer.sniff(head)
+        assertEquals("TIFF_FAMILY", outcome.format)
+        assertFalse(outcome.supported)
+        assertTrue(outcome.rawCandidate)
+    }
+
+    @Test
+    fun `RAW 非対応の説明文は機種名と未対応を明示する`() {
+        val probe = ImportProbe(
+            uri = "content://downloads/DSC00001.ARW",
+            displayName = "DSC00001.ARW",
+            mimeGuess = "image/x-sony-arw",
+            sniffedFormat = "TIFF_FAMILY",
+            sizeBytes = 24_969_216,
+            seekable = true,
+            supported = false,
+            warnings = listOf("TIFF家族: DNG/カメラRAW。デコーダー検証未達のため非対応候補"),
+        )
+        val detail = unsupportedImportDetail(probe)
+        assertTrue(detail.contains("Sony ARW（RAW 現像は未対応）"))
+        assertTrue(detail.contains("DSC00001.ARW"))
+        assertTrue(detail.contains("TIFF_FAMILY"))
+    }
+
+    @Test
+    fun `RAW は octet-stream でも SAF 列挙の対象になる`() {
+        assertTrue(ImportSniffer.isImportCandidate("application/octet-stream", "DSC00001.ARW"))
+        assertTrue(ImportSniffer.isImportCandidate("application/octet-stream", "x.cr3"))
+        assertTrue(ImportSniffer.isImportCandidate("image/jpeg", "photo.jpg"))
+        assertFalse(ImportSniffer.isImportCandidate("application/pdf", "doc.pdf"))
+        assertFalse(ImportSniffer.isImportCandidate("application/octet-stream", "notes.txt"))
     }
 
     @Test

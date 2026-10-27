@@ -138,7 +138,7 @@ class ContentUriImportRepository(
                         // 非対応は「候補」として明示する（U01 AC: 非対応は明示）。
                         return@withContext ImageOpResult.Failure(
                             ErrorCode.UNSUPPORTED_CODEC,
-                            "非対応候補: format=${probe.sniffedFormat} ${probe.warnings.joinToString(" / ")}",
+                            unsupportedImportDetail(probe),
                         )
                     }
                     registerSupported(uri, probe, grantWarnings)
@@ -262,13 +262,15 @@ class ContentUriImportRepository(
                 val projection = arrayOf(
                     DocumentsContract.Document.COLUMN_DOCUMENT_ID,
                     DocumentsContract.Document.COLUMN_MIME_TYPE,
+                    DocumentsContract.Document.COLUMN_DISPLAY_NAME,
                 )
                 val found = mutableListOf<String>()
                 contentResolver.query(childrenUri, projection, null, null, null)?.use { c ->
                     while (c.moveToNext()) {
                         val docId = c.getString(0)
                         val mime = c.getString(1)
-                        if (docId != null && ImportSniffer.isImageMime(mime)) {
+                        val name = c.getString(2)
+                        if (docId != null && ImportSniffer.isImportCandidate(mime, name)) {
                             found.add(
                                 DocumentsContract.buildDocumentUriUsingTree(treeUri, docId).toString(),
                             )
@@ -356,4 +358,21 @@ class ContentUriImportRepository(
         const val HASH_BUF = 64 * 1024
         const val SNIFF_LIMIT = 64
     }
+
+}
+
+/**
+ * 非対応取り込みの説明文（U01）。RAW は拡張子から機種名を補い、magic 判定の
+ * `TIFF_FAMILY` だけでは伝わらない「何のファイルを開こうとしたか」を明示する。
+ * 表示名は補助情報であり、対応可否の判定は [ImportSniffer.sniff] の結果のみを使う。
+ */
+internal fun unsupportedImportDetail(probe: ImportProbe): String {
+    val rawLabel = ImportSniffer.rawDisplayName(probe.displayName)
+    val prefix = if (rawLabel != null) {
+        "非対応候補: $rawLabel（RAW 現像は未対応）"
+    } else {
+        "非対応候補"
+    }
+    val fileName = probe.displayName?.takeIf { it.isNotBlank() }?.let { " $it" } ?: ""
+    return "$prefix:$fileName format=${probe.sniffedFormat} ${probe.warnings.joinToString(" / ")}"
 }

@@ -79,7 +79,37 @@ internal object ImportSniffer {
             listOf("既知のmagicに一致せず（対応判定は候補として明示）"))
     }
 
-    /** SAF フォルダー走査（ACTION_OPEN_DOCUMENT_TREE）で mime が image で始まるもののみ対象化する。 */
+    /**
+     * RAW 候補の表示名（拡張子ベース・magic では機種を確定できないため補助表示に限定）。
+     * 非対応理由を「TIFF 家族」より具体的に伝えるための UI 文言であり、デコード可否の判定ではない。
+     */
+    fun rawDisplayName(fileName: String?): String? {
+        val name = fileName?.lowercase(java.util.Locale.ROOT) ?: return null
+        return when {
+            name.endsWith(".arw") -> "Sony ARW"
+            name.endsWith(".dng") -> "DNG"
+            name.endsWith(".cr2") -> "Canon CR2"
+            name.endsWith(".cr3") -> "Canon CR3"
+            name.endsWith(".nef") -> "Nikon NEF"
+            name.endsWith(".raf") -> "Fujifilm RAF"
+            name.endsWith(".rw2") -> "Panasonic RW2"
+            name.endsWith(".orf") -> "Olympus ORF"
+            name.endsWith(".pef") -> "Pentax PEF"
+            name.endsWith(".srw") -> "Samsung SRW"
+            else -> null
+        }
+    }
+
+    /**
+     * SAF フォルダー走査の対象判定。
+     * image 系 MIME はそのまま対象。加えて、RAW（ARW/CR3 等）は provider が
+     * `application/octet-stream` を返すことがあるため、既知の RAW 拡張子も対象にする
+     * （拡張子は列挙の補助であり、対応可否は sniff/register が決める）。
+     */
+    fun isImportCandidate(mime: String?, fileName: String?): Boolean =
+        mime?.startsWith("image/") == true || rawDisplayName(fileName) != null
+
+    /** 互換 API（mime のみ）。RAW の octet-stream は [isImportCandidate] を使う。 */
     fun isImageMime(mime: String?): Boolean = mime != null && mime.startsWith("image/")
 
     /** 登録・表示に許すローカル取得スキーマ。ネットワーク経由の暗黙読み込み禁止（オフライン優先）。 */

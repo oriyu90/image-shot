@@ -15,3 +15,6 @@ captures/
 shots/
 .kotlin/
 .agent-state
+
+# 外部提供の検証用 RAW サンプル（大容量・fixture）
+ARW (sony)/

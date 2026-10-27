@@ -616,6 +616,7 @@ PR-30 (adaptive) — targetSdk 37 採用（判断待ち⑦）の直前に必須�
 | 項目 | 状態 | 確定経路 |
 |---|---|---|
 | Java `ImageDecoder` の DNG 実機復号 | 未検証（[文書] のみ） | PR-24 spike |
+| Sony ARW（ILCE-6000）の取り込み | **2026-10-27 受領（DSC00001/00003・各約25MB）**。静的判定は TIFF 家族=非対応候補、登録前に拒否（DB 非登録・デコードなし）。**エミュレータで SAF 選択・非対応拒否・DB 非登録を確認**。`image/*` では ARW が列挙されない問題を修正（`*/*`+RAW 拡張子候補）。最終文言/フォルダー取り込みは再確認待ち（`11` §5） | PR-24/25 |
 | `Bitmap.compress` による gainmap 保全の可否 | **✅ 実測済（2026-10-25・PR-22 spike）**: 全画素 1.27 乗算+gainmap 未修正の compress でマーカー XMP/hdrgm/ISO 21496/MPF 全存続・再 decode で諸元完全保全（TB710FU/API 36）。→ ADR-026 stage-1 条件付き pass-through の根拠 | PR-22 spike【更新 2026-10-26】 |
 | TB710FU の HDR 撮影（RAW/PRO）対応 | 未確認 | PR-22/24 の fixture 調達時に実測 |
 | bundletool jar の要取得（ネットワーク） | 最新版番号は取得時に台帳化 | PR-17 |
