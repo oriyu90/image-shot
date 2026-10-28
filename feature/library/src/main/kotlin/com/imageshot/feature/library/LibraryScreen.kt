@@ -51,6 +51,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
@@ -339,6 +340,8 @@ private fun AssetDetailPane(
                 text = asset.displayName,
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
             )
             Text(
                 text = stringResource(
@@ -403,21 +406,65 @@ private fun ImportHeader(
     onOpenTree: () -> Unit,
 ) {
     Column(horizontalAlignment = Alignment.Start, modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Button(
-                onClick = onPick,
-                enabled = !importing,
-            ) {
-                Text(if (importing) stringResource(LibraryR.string.library_import_in_progress, batchDone, batchTotal) else stringResource(LibraryR.string.library_import_pick))
-            }
-            OutlinedButton(onClick = onOpenFiles, enabled = !importing) {
-                Text(stringResource(LibraryR.string.library_import_files))
-            }
-            OutlinedButton(onClick = onOpenTree, enabled = !importing) {
-                Text(stringResource(LibraryR.string.library_import_tree))
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            if (maxWidth < NARROW_IMPORT_MAX_WIDTH) {
+                // 縦画面の狭幅: 主要ボタンを全幅、SAF 2 種を次行に置き、横スクロールに頼らず
+                // 3 ボタンすべてを最初から見せる（従来は右端の「フォルダー」が切れていた）。
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Button(
+                        onClick = onPick,
+                        enabled = !importing,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            if (importing) {
+                                stringResource(LibraryR.string.library_import_in_progress, batchDone, batchTotal)
+                            } else {
+                                stringResource(LibraryR.string.library_import_pick)
+                            },
+                        )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        OutlinedButton(
+                            onClick = onOpenFiles,
+                            enabled = !importing,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text(stringResource(LibraryR.string.library_import_files))
+                        }
+                        OutlinedButton(
+                            onClick = onOpenTree,
+                            enabled = !importing,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text(stringResource(LibraryR.string.library_import_tree))
+                        }
+                    }
+                }
+            } else {
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Button(
+                        onClick = onPick,
+                        enabled = !importing,
+                    ) {
+                        Text(
+                            if (importing) {
+                                stringResource(LibraryR.string.library_import_in_progress, batchDone, batchTotal)
+                            } else {
+                                stringResource(LibraryR.string.library_import_pick)
+                            },
+                        )
+                    }
+                    OutlinedButton(onClick = onOpenFiles, enabled = !importing) {
+                        Text(stringResource(LibraryR.string.library_import_files))
+                    }
+                    OutlinedButton(onClick = onOpenTree, enabled = !importing) {
+                        Text(stringResource(LibraryR.string.library_import_tree))
+                    }
+                }
             }
         }
     }
@@ -432,30 +479,75 @@ private fun SearchSortBar(
     onSelectSort: (LibraryViewModel.AssetSortOrder) -> Unit,
     onRefreshAvailability: () -> Unit,
 ) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-    ) {
-        OutlinedTextField(
-            value = query,
-            onValueChange = onQueryChange,
-            singleLine = true,
-            placeholder = { Text(stringResource(LibraryR.string.library_search_placeholder)) },
-            modifier = Modifier.weight(1f),
-        )
-        FilterChip(
-            selected = sortOrder == LibraryViewModel.AssetSortOrder.DATE_TAKEN_DESC,
-            onClick = { onSelectSort(LibraryViewModel.AssetSortOrder.DATE_TAKEN_DESC) },
-            label = { Text(stringResource(LibraryR.string.library_sort_date_taken)) },
-        )
-        FilterChip(
-            selected = sortOrder == LibraryViewModel.AssetSortOrder.DISPLAY_NAME_ASC,
-            onClick = { onSelectSort(LibraryViewModel.AssetSortOrder.DISPLAY_NAME_ASC) },
-            label = { Text(stringResource(LibraryR.string.library_sort_display_name)) },
-        )
-        TextButton(onClick = onRefreshAvailability, enabled = !sweeping) {
-            Text(stringResource(if (sweeping) LibraryR.string.library_availability_checking else LibraryR.string.library_availability_check))
+    BoxWithConstraints(Modifier.fillMaxWidth().padding(top = 4.dp)) {
+        if (maxWidth < NARROW_SEARCH_MAX_WIDTH) {
+            // 縦画面: 検索欄を全幅、ソート/可用性確認を次行（横スクロール）に分ける。
+            // 1 行に詰めると検索欄が潰れ、右端の「可用性確認」が画面外へ出る。
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = onQueryChange,
+                    singleLine = true,
+                    placeholder = { Text(stringResource(LibraryR.string.library_search_placeholder)) },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                ) {
+                    FilterChip(
+                        selected = sortOrder == LibraryViewModel.AssetSortOrder.DATE_TAKEN_DESC,
+                        onClick = { onSelectSort(LibraryViewModel.AssetSortOrder.DATE_TAKEN_DESC) },
+                        label = { Text(stringResource(LibraryR.string.library_sort_date_taken)) },
+                    )
+                    FilterChip(
+                        selected = sortOrder == LibraryViewModel.AssetSortOrder.DISPLAY_NAME_ASC,
+                        onClick = { onSelectSort(LibraryViewModel.AssetSortOrder.DISPLAY_NAME_ASC) },
+                        label = { Text(stringResource(LibraryR.string.library_sort_display_name)) },
+                    )
+                    TextButton(onClick = onRefreshAvailability, enabled = !sweeping) {
+                        Text(
+                            stringResource(
+                                if (sweeping) LibraryR.string.library_availability_checking
+                                else LibraryR.string.library_availability_check,
+                            ),
+                        )
+                    }
+                }
+            }
+        } else {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = onQueryChange,
+                    singleLine = true,
+                    placeholder = { Text(stringResource(LibraryR.string.library_search_placeholder)) },
+                    modifier = Modifier.weight(1f),
+                )
+                FilterChip(
+                    selected = sortOrder == LibraryViewModel.AssetSortOrder.DATE_TAKEN_DESC,
+                    onClick = { onSelectSort(LibraryViewModel.AssetSortOrder.DATE_TAKEN_DESC) },
+                    label = { Text(stringResource(LibraryR.string.library_sort_date_taken)) },
+                )
+                FilterChip(
+                    selected = sortOrder == LibraryViewModel.AssetSortOrder.DISPLAY_NAME_ASC,
+                    onClick = { onSelectSort(LibraryViewModel.AssetSortOrder.DISPLAY_NAME_ASC) },
+                    label = { Text(stringResource(LibraryR.string.library_sort_display_name)) },
+                )
+                TextButton(onClick = onRefreshAvailability, enabled = !sweeping) {
+                    Text(
+                        stringResource(
+                            if (sweeping) LibraryR.string.library_availability_checking
+                            else LibraryR.string.library_availability_check,
+                        ),
+                    )
+                }
+            }
         }
     }
 }
@@ -535,6 +627,7 @@ private fun AssetCell(
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
         Text(
             text = "${asset.sniffedFormat} · ${asset.width}×${asset.height}" +
@@ -546,6 +639,7 @@ private fun AssetCell(
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 
@@ -572,3 +666,9 @@ private val DETAIL_PANE_WIDTH = 360.dp
  * 非画像・非対応は取り込み時に ImportSniffer/register が拒否する（DB 非登録）。
  */
 private val SAF_PICK_MIME_TYPES = arrayOf("*/*")
+
+/** 取込ヘッダーを縦積みにする最大幅（これ未満で 3 ボタンを 2 行に折返す）。 */
+private val NARROW_IMPORT_MAX_WIDTH = 640.dp
+
+/** 検索欄を全幅にし、ソート/可用性を次行へ送る最大幅。 */
+private val NARROW_SEARCH_MAX_WIDTH = 560.dp

@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -65,6 +66,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.imageshot.core.model.AdjustmentId
@@ -203,6 +205,8 @@ fun EditorScreen(
                     toolPanel(Modifier.width(TOOL_PANEL_WIDE_WIDTH).fillMaxHeight())
                 }
             } else {
+                // BoxWithConstraints の受信者を Column 内へ持ち越さない（暗黙受信の曖昧さ回避）。
+                val availableHeight = maxHeight
                 Column(Modifier.fillMaxSize()) {
                     EditorTopBar(state)
                     EditorPreviewArea(
@@ -212,7 +216,15 @@ fun EditorScreen(
                         overlayEnabled = toolTab == EditorToolTab.LOCAL,
                         modifier = Modifier.fillMaxWidth().weight(1f),
                     )
-                    toolPanel(Modifier.fillMaxWidth().heightIn(max = 360.dp))
+                    // 画面高さに応じてツールパネルの上限を下げる（横向き小型端末や
+                    // マルチウィンドウで、パネルがプレビューと下部バーを押し出さない）。
+                    val panelMaxHeight = when {
+                        availableHeight < 420.dp -> 120.dp
+                        availableHeight < 520.dp -> 160.dp
+                        availableHeight < 700.dp -> 260.dp
+                        else -> 360.dp
+                    }
+                    toolPanel(Modifier.fillMaxWidth().heightIn(max = panelMaxHeight))
                     EditorBottomBar(
                         state = state,
                         onUndo = onUndo,
@@ -301,6 +313,8 @@ private fun EditorTopBar(state: EditorViewModel.EditorState) {
                 text = state.asset?.displayName ?: stringResource(EditorR.string.editor_loading_title),
                 style = MaterialTheme.typography.titleSmall,
                 color = EditorPalette.textPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             Text(
                 text = stringResource(EditorR.string.editor_revision, state.revision),
@@ -803,20 +817,46 @@ private fun ToolPanel(
         // タブ行（未実装タブも選択可能 — 「未実装」と明示表示するため。成功装いの表示はしない）。
         // PR-30: 2ペイン時のツールパネルは幅 360dp のため、タブ 6 個が横に収まらない。
         // 折返しではなく横スクロールにして、全タブ（局部補正の未実装表示を含む）へ到達可能にする。
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-        ) {
-            EditorToolTab.entries.forEach { tab ->
-                ToolTab(
-                    label = stringResource(tab.labelRes),
-                    hint = tab.hintRes?.let { stringResource(it) },
-                    implemented = tab.implemented,
-                    selected = selectedTab == tab,
-                    onClick = { onSelectTab(tab) },
-                )
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            if (maxWidth < COMPACT_CONTENT_MAX_WIDTH) {
+                // 縦画面/狭幅: 6 タブを 3 列×2 行に折返し、横スクロールなしで全タブを見せる。
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    EditorToolTab.entries.chunked(3).forEach { rowTabs ->
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            rowTabs.forEach { tab ->
+                                ToolTab(
+                                    label = stringResource(tab.labelRes),
+                                    hint = tab.hintRes?.let { stringResource(it) },
+                                    implemented = tab.implemented,
+                                    selected = selectedTab == tab,
+                                    onClick = { onSelectTab(tab) },
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                            repeat(3 - rowTabs.size) { Spacer(Modifier.weight(1f)) }
+                        }
+                    }
+                }
+            } else {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                ) {
+                    EditorToolTab.entries.forEach { tab ->
+                        ToolTab(
+                            label = stringResource(tab.labelRes),
+                            hint = tab.hintRes?.let { stringResource(it) },
+                            implemented = tab.implemented,
+                            selected = selectedTab == tab,
+                            onClick = { onSelectTab(tab) },
+                        )
+                    }
+                }
             }
         }
         when (selectedTab) {
@@ -898,10 +938,11 @@ private fun ToolTab(
     implemented: Boolean,
     selected: Boolean,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val bg = if (selected) EditorPalette.panelRaised else EditorPalette.panel
     Column(
-        modifier = Modifier
+        modifier = modifier
             .background(bg)
             .border(1.dp, EditorPalette.line)
             .clickable(onClick = onClick)
@@ -1285,7 +1326,8 @@ private fun HslContent(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = 4.dp),
+            .padding(top = 4.dp)
+            .horizontalScroll(rememberScrollState()),
     ) {
         EditNodeSpecs.HSL_BANDS.forEach { bandId ->
             val label = stringResource(HslBandLabels.bandRes(bandId))
@@ -1446,7 +1488,10 @@ private fun GeometryContent(
         modifier = Modifier.padding(top = 8.dp),
     )
     // プリセット（原寸/1:1/3:2/4:3/16:9）。操作ごとに確定。プレビューはレンダリング経由で即反映。
-    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        modifier = Modifier.horizontalScroll(rememberScrollState()),
+    ) {
         TextButton(onClick = onCropReset) {
             Text(stringResource(EditorR.string.editor_crop_original), color = EditorPalette.textPrimary)
         }
@@ -1991,12 +2036,67 @@ private fun EditorBottomBar(
     onExport: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Row(
-        modifier = modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        TextButton(onClick = onUndo, enabled = state.canUndo && !state.dragging) {
+    BoxWithConstraints(modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
+        val count = stringResource(EditorR.string.editor_history_count, state.history.size)
+        if (maxWidth < COMPACT_CONTENT_MAX_WIDTH) {
+            // 縦画面: 1 行に 5 操作を並べると右端（書き出し）が切れるため 2 行にする。
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = onUndo, enabled = state.canUndo && !state.dragging) {
+                        Text(
+                            stringResource(EditorR.string.editor_undo),
+                            color = if (state.canUndo) EditorPalette.textPrimary else EditorPalette.textSecondary,
+                        )
+                    }
+                    TextButton(onClick = onRedo, enabled = state.canRedo && !state.dragging) {
+                        Text(
+                            stringResource(EditorR.string.editor_redo),
+                            color = if (state.canRedo) EditorPalette.textPrimary else EditorPalette.textSecondary,
+                        )
+                    }
+                    Text(
+                        text = count,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = EditorPalette.textSecondary,
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(
+                        onClick = {},
+                        modifier = Modifier.pointerInput(Unit) {
+                            detectTapGestures(
+                                onPress = {
+                                    onBeforeChanged(true)
+                                    tryAwaitRelease()
+                                    onBeforeChanged(false)
+                                },
+                            )
+                        },
+                    ) {
+                        Text(stringResource(EditorR.string.editor_button_before_after), color = EditorPalette.textPrimary)
+                    }
+                    Spacer(Modifier.weight(1f))
+                    Button(
+                        onClick = { onExport(state.assetId) },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = EditorPalette.accent,
+                            contentColor = EditorPalette.bg,
+                        ),
+                    ) {
+                        Text(stringResource(EditorR.string.editor_export))
+                    }
+                }
+            }
+        } else {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                TextButton(onClick = onUndo, enabled = state.canUndo && !state.dragging) {
             Text(
                 stringResource(EditorR.string.editor_undo),
                 color = if (state.canUndo) EditorPalette.textPrimary else EditorPalette.textSecondary,
@@ -2008,35 +2108,39 @@ private fun EditorBottomBar(
                 color = if (state.canRedo) EditorPalette.textPrimary else EditorPalette.textSecondary,
             )
         }
-        Text(
-            text = stringResource(EditorR.string.editor_history_count, state.history.size),
-            style = MaterialTheme.typography.labelSmall,
-            color = EditorPalette.textSecondary,
-            modifier = Modifier.weight(1f),
-        )
-        // 長押し Before/After（§4.3）。押下中のみ既定値プレビューに切替える。
-        TextButton(
-            onClick = {},
-            modifier = Modifier.pointerInput(Unit) {
-                detectTapGestures(
-                    onPress = {
-                        onBeforeChanged(true)
-                        tryAwaitRelease()
-                        onBeforeChanged(false)
-                    },
+                Text(
+                    text = count,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = EditorPalette.textSecondary,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
-            },
-        ) {
-            Text(stringResource(EditorR.string.editor_button_before_after), color = EditorPalette.textPrimary)
-        }
-        Button(
-            onClick = { onExport(state.assetId) },
-            colors = ButtonDefaults.buttonColors(
-                containerColor = EditorPalette.accent,
-                contentColor = EditorPalette.bg,
-            ),
-        ) {
-            Text(stringResource(EditorR.string.editor_export))
+                // 長押し Before/After（§4.3）。押下中のみ既定値プレビューに切替える。
+                TextButton(
+                    onClick = {},
+                    modifier = Modifier.pointerInput(Unit) {
+                        detectTapGestures(
+                            onPress = {
+                                onBeforeChanged(true)
+                                tryAwaitRelease()
+                                onBeforeChanged(false)
+                            },
+                        )
+                    },
+                ) {
+                    Text(stringResource(EditorR.string.editor_button_before_after), color = EditorPalette.textPrimary)
+                }
+                Button(
+                    onClick = { onExport(state.assetId) },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = EditorPalette.accent,
+                        contentColor = EditorPalette.bg,
+                    ),
+                ) {
+                    Text(stringResource(EditorR.string.editor_export))
+                }
+            }
         }
     }
 }
@@ -2048,3 +2152,6 @@ private val WIDE_LAYOUT_MIN_WIDTH = 840.dp
 
 /** F3（PR-30）: 横並び時のツールパネル幅（スライダー名+値が折り返さず収まる最小幅）。 */
 private val TOOL_PANEL_WIDE_WIDTH = 360.dp
+
+/** タブ/下部バーを折返す最大幅（これ未満で 2 行レイアウト）。 */
+private val COMPACT_CONTENT_MAX_WIDTH = 600.dp
