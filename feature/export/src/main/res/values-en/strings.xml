@@ -1,0 +1,30 @@
+<resources>
+    <!-- English (en) UI strings for feature:export. Key-for-key mirror of values/strings.xml. -->
+    <string name="export_title">Export</string>
+    <string name="export_pipeline_note">Jobs are processed by WorkManager (ADR-010). Once queued, a job advances through QUEUED → PREPARING → RENDERING → ENCODING → VERIFYING → PUBLISHING → COMPLETE as a two-phase commit, so partial output is never treated as complete.</string>
+    <string name="export_support_note">Note: only the 9 whitelisted EXIF capture tags are written back (Make/Model/LensModel/DateTime/DateTimeOriginal/FNumber/ISO/FocalLength/ExposureTime; orientation is always 1 and GPS/location is never written). RAW/TIFF export is not supported. For HDR sources the export either passes the gainmap through or writes SDR only, depending on the edits, and the reason for that choice is recorded in the request file. Job settings live in the request file under the cache directory, so clearing the cache makes jobs FAILED_PERMANENT (they must be configured again).</string>
+    <string name="export_enqueuing">Queueing…</string>
+    <string name="export_button_enqueue">Start export</string>
+
+    <!-- Source document -->
+    <string name="export_document_error_head">Failed to load the edit document</string>
+    <string name="export_document_error_detail">%1$s: %2$s</string>
+    <string name="export_document_loading">Loading…</string>
+    <string name="export_document_summary">Document %1$s… rev%2$d / slider changes: %3$d%4$s</string>
+    <string name="export_document_has_curve"> / with tone curve</string>
+
+    <!-- Format / quality / destination -->
+    <string name="export_format">Format</string>
+    <string name="export_quality">Quality</string>
+    <string name="export_quality_value">Quality: %1$d</string>
+    <string name="export_quality_png_note">Quality settings are N/A for PNG (lossless)</string>
+    <string name="export_destination_none">Destination: not selected</string>
+    <string name="export_destination">Destination: %1$s</string>
+    <string name="export_destination_pick">Select a destination…</string>
+
+    <!-- Jobs -->
+    <string name="export_jobs_title">Jobs</string>
+    <string name="export_jobs_empty">No jobs</string>
+    <string name="export_job_error">Error: %1$s</string>
+    <string name="export_error_uri_revoked">The URI permission for the input photo has expired. Relink it from the library, then export again.</string>
+</resources>

@@ -53,7 +53,7 @@ class ContentUriImportRepository(
         if (!ImportSniffer.isAllowedLocalScheme(uri.scheme?.lowercase())) {
             return@withContext ImageOpResult.Failure(
                 ErrorCode.UNSUPPORTED_CODEC,
-                "禁止スキーマ scheme=${uri.scheme}（オフライン優先: ネットワークURIは読み込まない）",
+                "Blocked URI scheme: ${uri.scheme} (offline-first: network URIs are never read)",
             )
         }
         val declaredSize = querySize(uri)
@@ -79,7 +79,7 @@ class ContentUriImportRepository(
                 val bounds = if (sniffed.supported) {
                     readBounds(uri).also { (w, h) ->
                         if (w > 0 && h > 0) warnings.add("decoder bounds check: ${w}x${h}")
-                        else warnings.add("decoder bounds check 失敗（デコーダー適合は未検証）。表示時に要注意")
+                        else warnings.add("Decoder bounds check failed; decoder compatibility unverified")
                     }
                 } else null
 
@@ -109,7 +109,7 @@ class ContentUriImportRepository(
             if (!ImportSniffer.isAllowedLocalScheme(uri.scheme?.lowercase())) {
                 return@withContext ImageOpResult.Failure(
                     ErrorCode.UNSUPPORTED_CODEC,
-                    "禁止スキーマ scheme=${uri.scheme}",
+                    "Blocked URI scheme: ${uri.scheme}",
                 )
             }
 
@@ -120,7 +120,7 @@ class ContentUriImportRepository(
                 val grant = takePersistableReadGrant(uri)
                 if (grant is ImageOpResult.Failure) {
                     grantWarnings = listOf(
-                        "persistable URI permission 取得失敗（${grant.code}）: 端末再起動後に再関連付けが必要になる可能性",
+                        "Failed to obtain persistable URI permission (${grant.code}); relink may be required after reboot",
                     )
                 }
             }
@@ -278,7 +278,7 @@ class ContentUriImportRepository(
                     }
                 } ?: return@withContext ImageOpResult.Failure(
                     ErrorCode.URI_REVOKED,
-                    "tree query returned null（権限失効の可能性）",
+                    "Tree query returned null (permission may be revoked)",
                 )
                 ImageOpResult.Success(found)
             } catch (e: SecurityException) {
@@ -369,9 +369,9 @@ class ContentUriImportRepository(
 internal fun unsupportedImportDetail(probe: ImportProbe): String {
     val rawLabel = ImportSniffer.rawDisplayName(probe.displayName)
     val prefix = if (rawLabel != null) {
-        "非対応候補: $rawLabel（RAW 現像は未対応）"
+        "Unsupported candidate: $rawLabel (RAW development is not supported)"
     } else {
-        "非対応候補"
+        "Unsupported candidate"
     }
     val fileName = probe.displayName?.takeIf { it.isNotBlank() }?.let { " $it" } ?: ""
     return "$prefix:$fileName format=${probe.sniffedFormat} ${probe.warnings.joinToString(" / ")}"

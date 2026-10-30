@@ -1,0 +1,4 @@
+<resources>
+    <!-- English (en) app-level strings. Mirrors values/strings.xml key-for-key. -->
+    <string name="app_name">Image Shot</string>
+</resources>

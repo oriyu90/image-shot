@@ -1,0 +1,183 @@
+<resources>
+    <!-- English (en) UI strings for feature:editor. Key-for-key mirror of values/strings.xml. -->
+    <!-- Includes the slider labels (AdjustmentId, 34 entries) and the HSL band/parameter labels (8 + 3). -->
+
+    <!-- Top bar / preview -->
+    <string name="editor_loading_title">Loading photo…</string>
+    <string name="editor_revision">Revision r%1$d</string>
+    <string name="editor_save_saving">Saving…</string>
+    <string name="editor_save_saved">Saved</string>
+    <string name="editor_save_failed">Save failed</string>
+    <string name="editor_cd_before_preview">Before (defaults) preview</string>
+    <string name="editor_cd_preview">Edit preview</string>
+    <string name="editor_generating_preview">Generating preview…</string>
+    <string name="editor_badge_before">Before (defaults)</string>
+    <string name="editor_button_before_after">Before/After</string>
+    <string name="editor_render_failed_title">Rendering failed</string>
+
+    <!-- Tabs -->
+    <string name="editor_tab_basic">Basic</string>
+    <string name="editor_tab_curve">Curve</string>
+    <string name="editor_tab_hsl">HSL</string>
+    <string name="editor_tab_geometry">Geometry</string>
+    <string name="editor_tab_detail">Detail</string>
+    <string name="editor_tab_local">Local adjustments</string>
+    <string name="editor_not_implemented">Not implemented</string>
+    <string name="editor_detail_title">Detail (sharpen / noise reduction)</string>
+    <string name="editor_detail_notice">Sharpen boosts local edge contrast, while luma noise reduction smooths graininess (chroma is preserved).</string>
+    <string name="editor_detail_help">Strength from 0 to 100. Processing order is develop → detail → export resize, so the preview and the export match.</string>
+    <string name="editor_detail_light_path_notice">This image is larger than 12 MP. For exports above 12 MP, detail processing automatically falls back to the light path (sharpen only, no luma NR); the preview keeps the normal path.</string>
+    <string name="editor_detail_degraded_notice">Processing was lightened, so quality was reduced automatically (sharpen only; luma noise reduction skipped)</string>
+    <string name="editor_local_title">Local adjustments (masks)</string>
+
+    <!-- Local adjustments (masks) -->
+    <string name="editor_local_help">Drag the handles on the preview to define the area, then use the sliders below to adjust only that selection. Processing order is geometry → basic → mask → detail, so the preview and the export match.</string>
+    <string name="editor_mask_list_header">Mask %1$d/%2$d</string>
+    <string name="editor_mask_add_linear">Add linear</string>
+    <string name="editor_mask_add_radial">Add radial</string>
+    <string name="editor_mask_add_brush">Add brush</string>
+    <string name="editor_mask_full">Up to %1$d masks (delete an unused mask)</string>
+    <string name="editor_mask_empty">No masks yet. Add one with the buttons above.</string>
+    <string name="editor_mask_chip">%1$s %2$d</string>
+    <string name="editor_mask_none_selected">Select a mask to show its handles on the preview.</string>
+    <string name="editor_mask_selected">Selected: %1$s</string>
+    <string name="editor_mask_type_linear">Linear</string>
+    <string name="editor_mask_type_radial">Radial</string>
+    <string name="editor_mask_type_brush">Brush</string>
+    <string name="editor_mask_delete">Delete this mask</string>
+    <string name="editor_mask_feather">Edge feathering</string>
+    <string name="editor_mask_angle">Angle</string>
+    <string name="editor_mask_degrees">%1$s°</string>
+    <string name="editor_mask_brush_radius">Brush radius (next stroke)</string>
+    <string name="editor_mask_strokes">Strokes %1$d/%2$d</string>
+    <string name="editor_mask_adjust_header">Adjustments inside the mask (selection only)</string>
+    <string name="editor_mask_adjust_temperature">Temperature (K)</string>
+    <string name="editor_mask_value_unset">—</string>
+    <string name="editor_mask_reset">Reset adjustments to 0</string>
+
+    <!-- History -->
+    <string name="editor_history_open">Close history (%1$d)</string>
+    <string name="editor_history_closed">Show history (%1$d)</string>
+    <string name="editor_history_empty">No committed actions yet</string>
+    <string name="editor_history_count">History: %1$d</string>
+
+    <!-- Basic tab -->
+    <string name="editor_drag_quality">Dragging: low resolution / Release: high resolution</string>
+    <string name="editor_slider_ev">%1$s (EV)</string>
+    <string name="editor_slider_temp_relative">%1$s −100..100</string>
+
+    <!-- Curve tab -->
+    <string name="editor_curve_title">Curve</string>
+    <string name="editor_curve_reset">Reset to neutral</string>
+    <string name="editor_curve_help">Drag: move point / Tap: add point / Double-tap: delete point</string>
+    <string name="editor_curve_points">Control points %1$d/%2$d (min %3$d)</string>
+    <string name="editor_curve_channel_master">Master</string>
+    <string name="editor_curve_channel_r">R</string>
+    <string name="editor_curve_channel_g">G</string>
+    <string name="editor_curve_channel_b">B</string>
+
+    <!-- HSL tab -->
+    <string name="editor_hsl_title">HSL color mixer (8 standard bands)</string>
+    <string name="editor_hsl_legend">Hue ±100 = ±30° / Saturation and lightness are −100..100 (lightness is amplified by 2^v in linear light)</string>
+
+    <!-- Geometry tab -->
+    <string name="editor_geometry_title">Geometry</string>
+    <string name="editor_rotate_left">⟲ Rotate 90° left</string>
+    <string name="editor_rotate_right">⟳ Rotate 90° right</string>
+    <string name="editor_flip_h_on">Horizontal flip: ON</string>
+    <string name="editor_flip_h_off">Horizontal flip: OFF</string>
+    <string name="editor_flip_v_on">Vertical flip: ON</string>
+    <string name="editor_flip_v_off">Vertical flip: OFF</string>
+    <string name="editor_geometry_status">Current: rotation %1$s° / crop %2$s</string>
+    <string name="editor_crop_header">Crop (centered, preset aspect ratio)</string>
+    <string name="editor_crop_original">Original size</string>
+    <string name="editor_crop_none">None (original size)</string>
+    <string name="editor_geometry_angle_title">Fine angle adjustment (±45°)</string>
+    <string name="editor_geometry_angle_reset">Reset angle to 0°</string>
+    <string name="editor_crop_move_header">Crop frame position and size (keeps the preset aspect ratio)</string>
+    <string name="editor_crop_move_left">←</string>
+    <string name="editor_crop_move_right">→</string>
+    <string name="editor_crop_move_up">↑</string>
+    <string name="editor_crop_move_down">↓</string>
+    <string name="editor_crop_shrink">Shrink frame</string>
+    <string name="editor_crop_grow">Enlarge frame</string>
+
+    <!-- Number input dialog / bottom bar -->
+    <string name="editor_number_dialog_title">Set %1$s numerically</string>
+    <string name="editor_number_hint">Allowed range: %1$d .. %2$d</string>
+    <string name="editor_number_error_empty">Enter a number</string>
+    <string name="editor_number_error_invalid">Invalid value</string>
+    <string name="editor_button_confirm">OK</string>
+    <string name="editor_button_cancel">Cancel</string>
+    <string name="editor_undo">Undo</string>
+    <string name="editor_redo">Redo</string>
+    <string name="editor_export">Export…</string>
+
+    <!-- ViewModel messages -->
+    <string name="editor_msg_document_load_failed">Failed to load the edit document</string>
+    <string name="editor_msg_doc_not_loaded">The edit document is not loaded</string>
+    <string name="editor_history_op_apply">Change</string>
+    <string name="editor_history_op_undo">Undo</string>
+    <string name="editor_history_op_redo">Redo</string>
+    <string name="editor_history_curve">%1$s: %2$s curve, %3$d points</string>
+    <string name="editor_history_geometry_plain">%1$s: Geometry</string>
+    <string name="editor_history_geometry">%1$s: Geometry (%2$s)</string>
+    <string name="editor_history_by_path">%1$s %2$s</string>
+    <string name="editor_history_slider">%1$s: %2$s %3$s</string>
+    <string name="editor_history_flip_h">Horizontal flip</string>
+    <string name="editor_history_flip_v">Vertical flip</string>
+    <string name="editor_history_crop">Crop</string>
+    <string name="editor_history_rotation">Rotation %1$s°</string>
+    <string name="editor_history_mask">%1$s: %2$d masks</string>
+
+    <!-- Slider labels (AdjustmentId display mapping). -->
+    <string name="editor_adjust_exposure">Exposure</string>
+    <string name="editor_adjust_contrast">Contrast</string>
+    <string name="editor_adjust_highlights">Highlights</string>
+    <string name="editor_adjust_shadows">Shadows</string>
+    <string name="editor_adjust_whites">Whites</string>
+    <string name="editor_adjust_blacks">Blacks</string>
+    <string name="editor_adjust_vibrance">Vibrance</string>
+    <string name="editor_adjust_saturation">Saturation</string>
+    <string name="editor_adjust_temperature">Temperature</string>
+    <string name="editor_adjust_tint">Tint</string>
+    <string name="editor_adjust_detail_sharpen">Sharpen</string>
+    <string name="editor_adjust_detail_luma_noise">Luma noise reduction</string>
+    <string name="editor_adjust_hsl_red_hue">Red hue</string>
+    <string name="editor_adjust_hsl_red_sat">Red saturation</string>
+    <string name="editor_adjust_hsl_red_lum">Red lightness</string>
+    <string name="editor_adjust_hsl_orange_hue">Orange hue</string>
+    <string name="editor_adjust_hsl_orange_sat">Orange saturation</string>
+    <string name="editor_adjust_hsl_orange_lum">Orange lightness</string>
+    <string name="editor_adjust_hsl_yellow_hue">Yellow hue</string>
+    <string name="editor_adjust_hsl_yellow_sat">Yellow saturation</string>
+    <string name="editor_adjust_hsl_yellow_lum">Yellow lightness</string>
+    <string name="editor_adjust_hsl_green_hue">Green hue</string>
+    <string name="editor_adjust_hsl_green_sat">Green saturation</string>
+    <string name="editor_adjust_hsl_green_lum">Green lightness</string>
+    <string name="editor_adjust_hsl_aqua_hue">Aqua hue</string>
+    <string name="editor_adjust_hsl_aqua_sat">Aqua saturation</string>
+    <string name="editor_adjust_hsl_aqua_lum">Aqua lightness</string>
+    <string name="editor_adjust_hsl_blue_hue">Blue hue</string>
+    <string name="editor_adjust_hsl_blue_sat">Blue saturation</string>
+    <string name="editor_adjust_hsl_blue_lum">Blue lightness</string>
+    <string name="editor_adjust_hsl_purple_hue">Purple hue</string>
+    <string name="editor_adjust_hsl_purple_sat">Purple saturation</string>
+    <string name="editor_adjust_hsl_purple_lum">Purple lightness</string>
+    <string name="editor_adjust_hsl_magenta_hue">Magenta hue</string>
+    <string name="editor_adjust_hsl_magenta_sat">Magenta saturation</string>
+    <string name="editor_adjust_hsl_magenta_lum">Magenta lightness</string>
+
+    <!-- HSL band and parameter names (EditNodeSpecs.HSL_BANDS / HSL_PARAMS display mapping). -->
+    <string name="editor_hsl_band_red">Red</string>
+    <string name="editor_hsl_band_orange">Orange</string>
+    <string name="editor_hsl_band_yellow">Yellow</string>
+    <string name="editor_hsl_band_green">Green</string>
+    <string name="editor_hsl_band_aqua">Aqua</string>
+    <string name="editor_hsl_band_blue">Blue</string>
+    <string name="editor_hsl_band_purple">Purple</string>
+    <string name="editor_hsl_band_magenta">Magenta</string>
+    <string name="editor_hsl_param_hue">Hue</string>
+    <string name="editor_hsl_param_sat">Saturation</string>
+    <string name="editor_hsl_param_lum">Lightness</string>
+</resources>

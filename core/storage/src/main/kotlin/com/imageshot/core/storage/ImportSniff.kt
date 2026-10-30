@@ -41,15 +41,15 @@ internal object ImportSniffer {
                     SniffOutcome("HEIF", supported = true, rawCandidate = false, emptyList())
                 brand.startsWith("avi") ->
                     SniffOutcome("AVIF", supported = false, rawCandidate = true,
-                        listOf("AVIF: §6 A/B目前。端末OSデコーダー検証が未達のため非対応候補"))
+                        listOf("AVIF: not yet supported; device OS decoder validation pending"))
                 brand.startsWith("crx") || brand.startsWith("cam") ->
                     SniffOutcome("RAW_ISOBMFF", supported = false, rawCandidate = true,
-                        listOf("RAW: brand=$brand デコーダー検証待ち（機種/圧縮方式別判定は§4.1）"))
+                        listOf("RAW: brand=$brand; decoder validation pending (per model/compression)"))
                 else -> SniffOutcome(
                     "ISOBMFF_$brand",
                     supported = false,
                     rawCandidate = false,
-                    listOf("ISOBMFF brand=$brand: 映像等の対象外形式（§13 非対象）"),
+                    listOf("ISOBMFF brand=$brand: unsupported format (video etc.)"),
                 )
             }
         }
@@ -61,22 +61,22 @@ internal object ImportSniffer {
                 "TIFF_FAMILY",
                 supported = false,
                 rawCandidate = true,
-                listOf("TIFF家族: DNG/カメラRAW。デコーダー検証未達のため非対応候補（機種/圧縮方式別に確定予定）"),
+                listOf("TIFF family: DNG/camera RAW; decoder validation pending, unsupported candidate"),
             )
         }
 
         if (head.size >= 3 && String(head, 0, 3) == "GIF") {
             return SniffOutcome("GIF", supported = false, rawCandidate = false,
-                listOf("GIF: §6 C区分（測定後に追加検討）"))
+                listOf("GIF: not supported yet; revisit after measurement"))
         }
 
         if (head.isEmpty()) {
             return SniffOutcome("UNKNOWN", supported = false, rawCandidate = false,
-                listOf("空ストリーム"))
+                listOf("Empty stream"))
         }
 
         return SniffOutcome("UNKNOWN", supported = false, rawCandidate = false,
-            listOf("既知のmagicに一致せず（対応判定は候補として明示）"))
+            listOf("No known magic bytes; reported as unsupported candidate"))
     }
 
     /**

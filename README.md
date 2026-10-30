@@ -1,51 +1,78 @@
-# Prism Photo（Image Shot / com.imageshot.app）— Android 16+ 写真現像・編集アプリ設計パック
+# Image Shot（Prism Photo）
 
-作成: 2026-10-18 / 最終更新: 2026-10-26 / 状態: 調査に基づく**開発基準案** + Gradleマルチモジュール雛形。性能・画質の数値は実装済みを意味しない。
+Android 16+（API 36）専用の、非破壊・オフライン優先・高色精度な写真編集アプリです。
+**Image Shot** is a non-destructive, local-first photo editor for Android 16+ (API 36).
 
-## 同梱物
+- パッケージ / Package: `com.imageshot.app`
+- 作者 / Author: **Yuki_Orita**
+- 公式サイト / Website: https://studio-rizi.pages.dev/projects/image-shot/
+- Discord: https://discord.gg/x7KXhNTD8M
+- X: https://x.com/InovateOfRIZI
 
-1. `01_製品仕様書.md`: 製品目標、機能とリリース範囲、画面、画像形式、受入条件。
-2. `02_実装定義書.md`: Kotlin/Compose/C++ NDK、RAW/ICC/HDR、編集DAG、JNI、DB、SAF、ExportJob、試験。
-3. `03_ADR_設計判断記録.md`: 17のアーキテクチャ選定と背景・代替案・リスク・再検討条件。
-4. `04_AI開発Skill構成_調査と導入.md`: 公式/コミュニティSkillの選別、OpenCode導入、複数エージェント分担。
-5. `05_機能体系調査_実装ギャップ.md`: 写真編集機能を細分化した優先順位表と技術的ギャップ分析。
-6. `AGENTS.md`: エージェントの短い全体作業指針。
-7. `.opencode/skills/*/SKILL.md`: 開発専用の7つのAgent Skills（実際に配置可能）。
-8. `qa/リリース試験マトリクス.md`: 対応画面・ファイル形式・安全・性能・出荷判定。
-9. `templates/PR_CHECKLIST.md`: PR完了条件。
+## 特長 / Features
 
-## Gradleマルチモジュール雛形
+- **非破壊編集**: 追記型イベント + スナップショット。undo/redo、強制終了後の復元。
+- **豊富な調整**: 露出/コントラスト/ハイライト/シャドウ/白/黒、WB（温度/色合い）、
+  自然な彩度/彩度、master + R/G/B カーブ、HSL 8 系統。
+- **ジオメトリ**: 自由角度回転（±45°微調整・数値入力）、反転、プリセット/自由クロップ。
+- **ディテール**: シャープ + 輝度ノイズ低減（色差保持）。
+- **局所補正**: 直線/円形/ブラシのマスク、feather、マスク内の tone/WB/color 補正。
+- **書き出し**: JPEG/PNG、品質指定、SAF、EXIF whitelist（GPS 除外）、HDR gainmap policy。
+- **UI**: 日本語 / English、edge-to-edge、スマホ縦横・タブレット 2 ペイン対応。
+- **プライバシー**: INTERNET 権限なし。原本を上書きしない。広域ストレージ権限なし。
 
-Android 16（API 36）以降専用。`./gradlew :app:assembleDebug` で `app` APK が生成される。
+## インストール / Install
 
-| モジュール | 役割 | 境界（02_実装定義書.md §2） |
-|---|---|---|
-| `app` | applicationId `com.imageshot.app`、MainActivity、Composeテーマ、navigation-compose、手動DI（AppContainer、Hilt不使用） | feature を束ねる |
-| `core/model` | EditRecipe / EditEvent / RenderRequest / RenderResult / Asset / ErrorCode(§11)。kotlinx.serialization。純Kotlin JVM | 依存なし |
-| `core/database` | Room (WAL) + KSP。AssetEntity / EditDocumentEntity / EditRevisionEntity(append-only) / EditSnapshotEntity / ExportJobEntity / ThumbnailEntity。recipe/events は JSON + schemaVersion で保存（CBOR化はTODO(ADR確認)） | feature → core |
-| `core/storage` | ImportRepository（ContentResolver/SAF、fingerprint=sha-256、非seekable入力のstagingコピー） | 原本上書きなし |
-| `core/render` | Kotlin/Bitmap 暫定トーンパイプライン（8bit sRGB CPU）。レシピ同値契約の土台 | NDK/C++ 実体は別モジュール |
-| `feature/library` | 写真グリッド + Photo Picker 取り込み（INTERNET権限なし） | — |
-| `feature/editor` | 編集画面骨格（プレビュー/スライダー/履歴） | プレビューサーフェスは Sprint C |
-| `feature/export` | 書き出し画面 + ExportJob キュー（WorkManager実働は Sprint C） | — |
+1. [Releases](https://github.com/oriyu90/image-shot/releases) から署名済み APK を取得。
+2. Android 16 以降の端末で「提供元不明のアプリ」を許可してインストール。
+3. 写真は Photo Picker または SAF から取り込みます（クラウド送信なし）。
 
-ビルド正本バージョンは `gradle/libs.versions.toml`（**PR-21・2026-10-25 更新: AGP 9.4.0 / built-in Kotlin 2.2.10 / KSP 2.3.12 / Gradle 9.6.0 wrapper** / Compose BOM 2025.06.01 / Room 2.8.5 / WorkManager 2.10.5 / Coil 3.3.0 / kotlinx-serialization 1.11.0 / navigation-compose 2.9.5）。built-in Kotlin は AGP 同梱版が正本であり独立には変更できない（KGP 由来プラグインも 2.2.10 に統一）。Coil 3.4+ と Compose BOM 2026.x は Kotlin/compileSdk 37 前提のため、compileSdk 36 の本雛形では旧世代を選択している（Kotlin 正本を 3.x に引き上げる際に再更新する）。
+> デバッグビルドは配布用ではありません。リリース APK は `upload` キーで署名されています。
 
-## 使用手順
+## ビルド / Build
 
-新規Android Studioプロジェクトを作成後、この設計パック内の文書をそのプロジェクトの`docs/`に、`AGENTS.md`と`.opencode/skills/`をリポジトリルートに配置する。OpenCodeはプロジェクトルートで起動する。Skill探索先の一次資料: https://opencode.ai/docs/skills
+```bash
+# JDK 17+ / Android SDK 36
+./gradlew test
+./gradlew :feature:editor:lintDebug :feature:export:lintDebug :feature:library:lintDebug
+./gradlew :app:assembleRelease :app:bundleRelease
+python3 tools/ui_strings_check.py
+```
 
-開発は `02_実装定義書.md` §14 のSprint Aから着手する。最初の技術Spikeは①24–48MP RAW現像の速度とpeak RSS、②GPU+HDR表示面の色変換、③XMP取り込みの部分適用、④破損入力への安全な失敗を推奨する。
+署名は `local.properties` の `RELEASE_STORE_FILE` / `RELEASE_STORE_PASSWORD` /
+`RELEASE_KEY_ALIAS` / `RELEASE_KEY_PASSWORD` を読みます。**キーストアとパスワードは
+この public リポジトリに含めません**（保守用の private リポジトリで管理）。
 
-## 最優先の設計ポイント
-- `minSdk=36`。大画面・折りたたみ対応。プレビューと調整UIはwindow幅ごとに配置変更。
-- RAW/色/HDRはKotlin UIから分離。原本は絶対に変更しない。
-- `.xmp` / `.lrtemplate` / `.dng`編集設定の読み込みは項目単位の部分対応を許容するが、全項目・全画質の一致は保証しない。
-- ローカル完結、高色精度とクラッシュ復旧を優先。高度なAIは任意モジュール。
-- モジュールやライブラリの採用は、ライセンス/サイズ/端末動作を実測して確定する。
+構成: AGP 9.4.0 / Gradle 9.6.0 / built-in Kotlin 2.2.10 / KSP 2.3.12 / Room 2.8.5 /
+Compose BOM 2025.06.01 / WorkManager 2.10.5。
 
-## 注意
-- リリース目標値（起動時間、クラッシュ率、サイズ、処理速度など）は**ベンチマーク実測ではない**。
-- 本パックはアプリ本体、試験済みコーデック、RAW対応カメラの完全なリストを同梱するものではない。
-- 標準ライブラリ以外のコード/AIモデル/レンズDBの配布条件は出荷前に法務・ライセンス確認する。
-- 外部設定ファイルは部分的に読み取れても視覚結果が異なる場合がある。ユーザーへの表示でこの差を隠さない。
+| モジュール | 役割 |
+|---|---|
+| `app` | 画面遷移、手動 DI、テーマ、署名設定 |
+| `core:model` | 純 Kotlin のレシピ/イベント/マスク仕様 |
+| `core:render` | 8bit sRGB CPU パイプライン（preview=export 共有） |
+| `core:database` | Room v1 + append-only 編集履歴 |
+| `core:storage` | SAF/Photo Picker 取り込み、指紋、可用性 |
+| `feature:library` / `feature:editor` / `feature:export` | 画面 |
+| `benchmark` | golden ΔE / NFR 計測（androidTest） |
+
+## 既知の制限 / Known limitations
+
+- **RAW 現像は未対応**です。Sony ARW などの非 DNG RAW は「非対応候補」として明示的に拒否し、
+  DB へ登録しません（DNG/ARW は ADR-027 / 今後の LibRaw 検討対象）。
+- 透視・光学補正、クロップのエッジドラッグ、chroma ノイズ低減は未実装です。
+- 48MP 超級の性能・メモリ、4GB 端末、折りたたみ/マルチウィンドウ、数値入力の IME は未検証です。
+- 8bit sRGB CPU パイプラインです（float/HDR パイプラインは未実装）。
+
+## ドキュメント
+
+設計・実装の正本はリポジトリ内の以下です。
+
+- `01_製品仕様書.md` / `02_実装定義書.md` / `03_ADR_設計判断記録.md`
+- `06_未実装欠陥と実装計画.md` / `07_Wave3実装計画書.md` / `09_Wave3残作業と以降の実装計画.md`
+- `10_品質精査と修正記録.md` / `11_Sony_ARW検証とアプリアイコン.md` / `12_多解像度UI精査と適応化.md`
+- `08_文字列台帳.md`（日本語/英語の文字列正本と例外）
+
+## ライセンス / License
+
+MIT License — see [LICENSE](LICENSE). Copyright (c) 2026 Yuki_Orita.

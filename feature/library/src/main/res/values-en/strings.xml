@@ -1,0 +1,53 @@
+<resources>
+    <!-- English (en) UI strings for feature:library. Key-for-key mirror of values/strings.xml. -->
+    <!-- Screen -->
+    <string name="library_import_in_progress">Importing… %1$d/%2$d</string>
+    <string name="library_import_pick">Import photos (multiple selection)</string>
+    <string name="library_import_files">Files (SAF)</string>
+    <string name="library_import_tree">Folder (SAF)</string>
+    <string name="library_search_placeholder">Search by display name</string>
+    <string name="library_sort_date_taken">Date taken</string>
+    <string name="library_sort_display_name">Display name</string>
+    <string name="library_availability_checking">Checking…</string>
+    <string name="library_availability_check">Check availability</string>
+    <string name="library_cell_content_disconnected">%1$s (disconnected: relink required)</string>
+    <string name="library_cell_state_revoked">Permission revoked</string>
+    <string name="library_cell_state_disconnected">Disconnected</string>
+    <string name="library_cell_relink">Relink</string>
+    <string name="library_cell_fingerprint_uncomputed"> · Fingerprint not computed</string>
+
+    <!-- Wide-screen (two-pane) detail pane -->
+    <string name="library_detail_title">Selected photo</string>
+    <string name="library_detail_placeholder">Select a photo in the list to show its details and preview here.</string>
+    <string name="library_detail_open">Open in editor</string>
+    <string name="library_detail_meta">%1$s · %2$d×%3$d</string>
+    <string name="library_detail_availability">Status: %1$s</string>
+    <string name="library_cell_state_ok">Connected</string>
+    <string name="library_detail_relink_hint">The URI permission has expired or the file cannot be found. Select the same photo again to reconnect it.</string>
+
+    <!-- ViewModel messages (inspection / import) -->
+    <string name="library_msg_inspect_failed">Inspection failed: %1$s</string>
+    <string name="library_msg_inspect_alert">Inspection warning: %1$s</string>
+    <string name="library_msg_import_batch_done">Import complete: %1$d / %2$d (unsupported candidates and failures are listed above)</string>
+    <string name="library_msg_import_one_ok">Import OK: %1$s</string>
+    <string name="library_msg_import_one_failed">Import failed: %1$s → %2$s %3$s</string>
+    <string name="library_msg_import_one_alert">Import warning: %1$s → %2$s</string>
+
+    <!-- ViewModel messages (folder / availability / relink / fingerprint) -->
+    <string name="library_msg_tree_grant_failed">Failed to persist the folder permission: %1$s (valid for this session only)</string>
+    <string name="library_msg_tree_scan_failed">Folder scan failed: %1$s %2$s</string>
+    <string name="library_msg_tree_scan_alert">Folder scan warning: %1$s</string>
+    <string name="library_msg_tree_empty">No supported images found directly in the folder (subfolders are not scanned)</string>
+    <string name="library_msg_sweep_found">Expired URIs: %1$d revoked / %2$d disconnected → recover with Relink on the cell</string>
+    <string name="library_msg_sweep_ok">Availability check: all %1$d connected (%2$d recovered)</string>
+    <string name="library_msg_visibility_check_failed">Visibility check failed: %1$s (the list keeps its previous state; retry with Check availability)</string>
+    <string name="library_msg_visibility_check_found">Visibility check: %1$d revoked / %2$d disconnected → recover with Relink</string>
+    <string name="library_msg_relink_missing">Relink failed: the target was not found</string>
+    <string name="library_msg_relink_failed">Relink failed: %1$s %2$s</string>
+    <string name="library_msg_relink_mismatch">Relink failed: the selected file does not match the original (sha-256 mismatch)</string>
+    <string name="library_msg_relink_ok">Relink complete: %1$s</string>
+    <string name="library_warn_fingerprint_uncomputed">The photo could not be verified because its legacy fingerprint has not been computed yet (deferred at registration)</string>
+    <string name="library_warn_permission_not_persisted">Could not obtain a persistable permission (you will need to relink after a restart)</string>
+    <string name="library_msg_fingerprint_failed">Fingerprint computation failed: %1$s (%2$s)</string>
+    <string name="library_msg_fingerprint_backfill_failed">Deferred fingerprint computation failed: %1$s %2$s</string>
+</resources>

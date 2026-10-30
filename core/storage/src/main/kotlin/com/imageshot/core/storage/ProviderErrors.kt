@@ -14,11 +14,11 @@ import java.io.IOException
  * - UNEXPECTED: 分類不能。無通知で続行しない。
  */
 internal sealed class ProviderFailure(val explain: String) {
-    object PermissionRevoked : ProviderFailure("persistable grant 失効")
+    object PermissionRevoked : ProviderFailure("Persistable grant revoked")
 
-    object ContentGone : ProviderFailure("provider 上に実体が無い（移動/削除/未同期）")
+    object ContentGone : ProviderFailure("Content is missing on the provider (moved/deleted/not synced)")
 
-    object OutOfMemory : ProviderFailure("メモリ不足（§11 OUT_OF_MEMORY・低品質降格対象）")
+    object OutOfMemory : ProviderFailure("Out of memory (OUT_OF_MEMORY; low-quality fallback applies)")
 
     class ProviderIo(message: String?) : ProviderFailure("provider IO error: ${message.orEmpty()}")
 

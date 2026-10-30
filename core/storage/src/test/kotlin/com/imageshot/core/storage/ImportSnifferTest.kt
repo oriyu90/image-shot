@@ -138,10 +138,10 @@ class ImportSnifferTest {
             sizeBytes = 24_969_216,
             seekable = true,
             supported = false,
-            warnings = listOf("TIFF家族: DNG/カメラRAW。デコーダー検証未達のため非対応候補"),
+            warnings = listOf("TIFF family: DNG/camera RAW; decoder validation pending, unsupported candidate"),
         )
         val detail = unsupportedImportDetail(probe)
-        assertTrue(detail.contains("Sony ARW（RAW 現像は未対応）"))
+        assertTrue(detail.contains("Sony ARW (RAW development is not supported)"))
         assertTrue(detail.contains("DSC00001.ARW"))
         assertTrue(detail.contains("TIFF_FAMILY"))
     }
