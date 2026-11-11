@@ -25,6 +25,7 @@ android {
 }
 
 dependencies {
+    implementation(project(":core:ui"))
     implementation(project(":core:model"))
     implementation(project(":core:database"))
     // request: ExportRenderer（core:render 新規ファイル）を使用するため。新規依存追加は既存カタログのみ。

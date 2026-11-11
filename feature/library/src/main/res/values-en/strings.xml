@@ -50,4 +50,16 @@
     <string name="library_warn_permission_not_persisted">Could not obtain a persistable permission (you will need to relink after a restart)</string>
     <string name="library_msg_fingerprint_failed">Fingerprint computation failed: %1$s (%2$s)</string>
     <string name="library_msg_fingerprint_backfill_failed">Deferred fingerprint computation failed: %1$s %2$s</string>
+    <!-- GUI remake (ui-android skill / DESIGN_RULES.md) -->
+    <string name="library_title">Library</string>
+    <string name="library_empty_title">No photos yet</string>
+    <string name="library_empty_body">Import photos and they appear here. Your originals are never rewritten.</string>
+    <string name="library_empty_primary">Import photos</string>
+    <string name="library_empty_secondary">Import from a folder</string>
+    <string name="library_import_more">More import options</string>
+    <string name="library_more_actions">More</string>
+    <plurals name="library_count">
+        <item quantity="one">%1$d photo</item>
+        <item quantity="other">%1$d photos</item>
+    </plurals>
 </resources>

@@ -10,6 +10,7 @@ values-en 完全性チェッカー（日本語 UI の英語対応・受入用）
 3. `translatable` 属性の一致
 4. 英語値に日本語文字（かな/漢字/全角記号）が残っていないこと
 5. 既定値が空でないのに英語値が空、という欠落がないこと
+6. <plurals> は `name[quantity]` を 1 キーとして同じ規則で比較する
 
 使用法: python3 tools/res_values_en_check.py   （リポジトリ・ルートで実行）
 終了コード: 0 = 全モジュール PASS / 1 = 違反あり
@@ -34,7 +35,7 @@ def parse_strings(path: str) -> dict[str, tuple[str, str]]:
     """{name: (text, translatable)} を返す。重複キーは ValueError。"""
     root = ET.parse(path).getroot()
     out: dict[str, tuple[str, str]] = {}
-    unsupported = sorted({el.tag for el in root if el.tag != "string"})
+    unsupported = sorted({el.tag for el in root if el.tag not in ("string", "plurals")})
     if unsupported:
         raise ValueError(
             f"{path}: unsupported resource elements {unsupported} "
@@ -48,6 +49,19 @@ def parse_strings(path: str) -> dict[str, tuple[str, str]]:
             raise ValueError(f"{path}: duplicate key {name!r}")
         text = "".join(el.itertext())
         out[name] = (text, el.get("translatable", "true"))
+    for el in root.findall("plurals"):
+        name = el.get("name")
+        if name is None:
+            raise ValueError(f"{path}: <plurals> without name")
+        translatable = el.get("translatable", "true")
+        for item in el.findall("item"):
+            quantity = item.get("quantity")
+            if quantity is None:
+                raise ValueError(f"{path}: <plurals name={name!r}> item without quantity")
+            key = f"{name}[{quantity}]"
+            if key in out:
+                raise ValueError(f"{path}: duplicate key {key!r}")
+            out[key] = ("".join(item.itertext()), translatable)
     return out
 
 

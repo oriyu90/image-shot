@@ -3,20 +3,25 @@ package com.imageshot.feature.export
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -24,11 +29,14 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.key
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.imageshot.core.model.ErrorCode
 import com.imageshot.core.model.ExportProgress
+import com.imageshot.core.ui.theme.spacing
 import com.imageshot.feature.export.R as ExportR
 
 /**
@@ -51,63 +59,127 @@ fun ExportScreen(
     onEnqueue: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // G3（PR-30）: ホストの一括 systemBarsPadding を廃止したため、この画面が Scaffold で
-    // inset を持つ。safeDrawing は IME を含むので、ソフトキーボードが出ても内容が隠れない。
+    val spacing = MaterialTheme.spacing
     Scaffold(
         modifier = modifier.fillMaxSize(),
+        containerColor = MaterialTheme.colorScheme.background,
         contentWindowInsets = WindowInsets.safeDrawing,
     ) { innerPadding ->
-        Column(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .consumeWindowInsets(innerPadding)
-                .verticalScroll(rememberScrollState())
-                .padding(12.dp),
+                .consumeWindowInsets(innerPadding),
         ) {
-            Text(stringResource(ExportR.string.export_title), style = MaterialTheme.typography.titleLarge)
-            Text(
-                stringResource(ExportR.string.export_pipeline_note),
-                style = MaterialTheme.typography.labelSmall,
-            )
-            Text(
-                // PR-23 実装後の現実を反映（旧「EXIF pass-through 未実装」文言は撤去）。
-                stringResource(ExportR.string.export_support_note),
-                style = MaterialTheme.typography.labelSmall,
-            )
+            // 広い画面では「設定」と「ジョブ」を左右に分け、行長を読み物幅に制限する。
+            // 高さも要する: 横画面スマホ（914×411dp）で左右に分けると設定カードが縦に押し出され、
+            // 主操作「書き出しを開始」が折りたたみ下に隠れる。縦短い画面は 1 カラム+スクロールに戻す。
+            val sideBySide = maxWidth >= EXPANDED_MIN_WIDTH && maxHeight >= EXPANDED_MIN_HEIGHT
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = spacing.lg, vertical = spacing.md),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+              Column(modifier = Modifier.widthIn(max = CONTENT_MAX_WIDTH).fillMaxWidth()) {
+                Text(
+                    text = stringResource(ExportR.string.export_title),
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Spacer(Modifier.size(spacing.xs))
+                TargetDocumentRow(settings.document, settings.documentError)
+                Spacer(Modifier.size(spacing.lg))
 
-            TargetDocumentRow(settings.document, settings.documentError)
-
-            FormatSelector(
-                format = settings.format,
-                onFormatSelected = onFormatSelected,
-            )
-
-            QualitySection(
-                format = settings.format,
-                quality = settings.quality,
-                onQualityChanged = onQualityChanged,
-            )
-
-            DestinationSection(
-                mime = settings.format.mime,
-                suggestedName = suggestedName(settings),
-                destinationUri = settings.destinationUri,
-                onPicked = onDestinationPicked,
-            )
-
-            Row(Modifier.padding(vertical = 8.dp)) {
-                Button(
-                    onClick = onEnqueue,
-                    enabled = settings.destinationUri != null &&
-                        settings.document != null &&
-                        !settings.enqueuing,
-                ) {
-                    Text(stringResource(if (settings.enqueuing) ExportR.string.export_enqueuing else ExportR.string.export_button_enqueue))
+                if (sideBySide) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(spacing.lg)) {
+                        ExportSettingsCard(
+                            settings = settings,
+                            onFormatSelected = onFormatSelected,
+                            onQualityChanged = onQualityChanged,
+                            onDestinationPicked = onDestinationPicked,
+                            onEnqueue = onEnqueue,
+                            modifier = Modifier.weight(1f),
+                        )
+                        JobsSection(jobs = jobs, modifier = Modifier.weight(1f))
+                    }
+                } else {
+                    ExportSettingsCard(
+                        settings = settings,
+                        onFormatSelected = onFormatSelected,
+                        onQualityChanged = onQualityChanged,
+                        onDestinationPicked = onDestinationPicked,
+                        onEnqueue = onEnqueue,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.size(spacing.xl))
+                    JobsSection(jobs = jobs, modifier = Modifier.fillMaxWidth())
                 }
-            }
 
-            JobsSection(jobs)
+                Spacer(Modifier.size(spacing.xxl))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                Spacer(Modifier.size(spacing.md))
+                Text(
+                    text = stringResource(ExportR.string.export_pipeline_note),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.widthIn(max = MaterialTheme.spacing.readingMaxWidth),
+                )
+                Spacer(Modifier.size(spacing.xs))
+                Text(
+                    text = stringResource(ExportR.string.export_support_note),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+              }
+            }
+        }
+    }
+}
+
+/** 出力設定（形式・品質・保存先・実行）。1 枚の面にまとめ、操作順を上から下へ揃える。 */
+@Composable
+private fun ExportSettingsCard(
+    settings: ExportViewModel.ExportSettingsUi,
+    onFormatSelected: (ExportFormat) -> Unit,
+    onQualityChanged: (Int) -> Unit,
+    onDestinationPicked: (String) -> Unit,
+    onEnqueue: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val spacing = MaterialTheme.spacing
+    Column(
+        modifier = modifier
+            .clip(MaterialTheme.shapes.large)
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .padding(spacing.lg),
+        verticalArrangement = Arrangement.spacedBy(spacing.md),
+    ) {
+        FormatSelector(format = settings.format, onFormatSelected = onFormatSelected)
+        QualitySection(
+            format = settings.format,
+            quality = settings.quality,
+            onQualityChanged = onQualityChanged,
+        )
+        DestinationSection(
+            mime = settings.format.mime,
+            suggestedName = suggestedName(settings),
+            destinationUri = settings.destinationUri,
+            onPicked = onDestinationPicked,
+        )
+        Button(
+            onClick = onEnqueue,
+            enabled = settings.destinationUri != null &&
+                settings.document != null &&
+                !settings.enqueuing,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(
+                stringResource(
+                    if (settings.enqueuing) ExportR.string.export_enqueuing else ExportR.string.export_button_enqueue,
+                ),
+            )
         }
     }
 }
@@ -211,8 +283,8 @@ private fun DestinationSection(
 }
 
 @Composable
-private fun JobsSection(jobs: List<ExportProgress>) {
-    Column(Modifier.padding(top = 4.dp)) {
+private fun JobsSection(jobs: List<ExportProgress>, modifier: Modifier = Modifier) {
+    Column(modifier) {
         Text(stringResource(ExportR.string.export_jobs_title), style = MaterialTheme.typography.labelLarge)
         if (jobs.isEmpty()) {
             Text(stringResource(ExportR.string.export_jobs_empty), style = MaterialTheme.typography.bodySmall)
@@ -262,3 +334,12 @@ private fun suggestedName(settings: ExportViewModel.ExportSettingsUi): String {
     )
     return "${base}_rev${doc?.recipeRevision ?: 0L}.${settings.format.fileExtension}"
 }
+
+/** 設定とジョブを左右に並べる最小幅（material3 expanded 相当）。 */
+private val EXPANDED_MIN_WIDTH = 840.dp
+
+/** 広い画面でも内容が間延びしない上限幅（DeX / タブレット横向き）。 */
+private val CONTENT_MAX_WIDTH = 1080.dp
+
+/** 設定/ジョブを左右に並べるのに必要な最小高さ。横画面スマホ（411dp）は 1 カラムに戻す。 */
+private val EXPANDED_MIN_HEIGHT = 600.dp

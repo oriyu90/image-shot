@@ -15,8 +15,8 @@ android {
         applicationId = "com.imageshot.app"
         minSdk = 36
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.1.1"
     }
 
     // 署名設定: local.properties の RELEASE_STORE_* を読む（.jks はコミット対象外）。
@@ -83,6 +83,7 @@ dependencies {
     implementation(project(":core:database"))
     implementation(project(":core:storage"))
     implementation(project(":core:render"))
+    implementation(project(":core:ui"))
     implementation(project(":feature:library"))
     implementation(project(":feature:editor"))
     implementation(project(":feature:export"))

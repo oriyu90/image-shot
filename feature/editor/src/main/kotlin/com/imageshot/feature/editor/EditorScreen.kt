@@ -33,6 +33,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
@@ -49,6 +50,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -70,6 +72,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.imageshot.core.model.AdjustmentId
+import com.imageshot.core.ui.theme.Palette
+import com.imageshot.core.ui.theme.spacing
 import com.imageshot.feature.editor.R as EditorR
 import com.imageshot.core.model.EditEventKind
 import com.imageshot.core.model.EditNodeSpecs
@@ -282,19 +286,18 @@ private fun EditorPreviewArea(
 // --------------------------------------------------------------- トークン（暗色ニュートラル）
 
 private object EditorPalette {
-    val bg = Color(0xFF141414) // 純黒でない低反射背景（§4.3）
-    val panel = Color(0xFF1E1E1E)
-    val panelRaised = Color(0xFF252525)
-    val line = Color(0xFF353535)
-    val textPrimary = Color(0xFFE8E8E8)
-    val textSecondary = Color(0xFF9A9A9A)
-    /** 強調色は操作対象1箇所に限る（§4.3）。スライダートラックと確定ボタンのみ使用。 */
-    val accent = Color(0xFFC98355)
-    val error = Color(0xFFE28181)
-    val imageWell = Color(0xFF101010)
-    /** タブ領域の未選択テキスト・補助線（カーブグリッド等）。 */
-    val curveGrid = Color(0xFF2A2A2A)
-    val curveIdentity = Color(0xFF4A4A4A)
+    val bg = Palette.Background
+    val panel = Palette.SurfaceContainerLow
+    val panelRaised = Palette.SurfaceContainerHigh
+    val line = Palette.OutlineVariant
+    val textPrimary = Palette.OnSurface
+    val textSecondary = Palette.OnSurfaceVariant
+    /** 強調色は 1 系統（DESIGN_RULES §2）。 */
+    val accent = Palette.Primary
+    val error = Palette.Error
+    val imageWell = Palette.SurfaceContainerLowest
+    val curveGrid = Palette.OutlineVariant
+    val curveIdentity = Palette.Outline
 }
 
 // --------------------------------------------------------------- 上部バー
@@ -817,48 +820,24 @@ private fun ToolPanel(
         // タブ行（未実装タブも選択可能 — 「未実装」と明示表示するため。成功装いの表示はしない）。
         // PR-30: 2ペイン時のツールパネルは幅 360dp のため、タブ 6 個が横に収まらない。
         // 折返しではなく横スクロールにして、全タブ（局部補正の未実装表示を含む）へ到達可能にする。
-        BoxWithConstraints(Modifier.fillMaxWidth()) {
-            if (maxWidth < COMPACT_CONTENT_MAX_WIDTH) {
-                // 縦画面/狭幅: 6 タブを 3 列×2 行に折返し、横スクロールなしで全タブを見せる。
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    EditorToolTab.entries.chunked(3).forEach { rowTabs ->
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            rowTabs.forEach { tab ->
-                                ToolTab(
-                                    label = stringResource(tab.labelRes),
-                                    hint = tab.hintRes?.let { stringResource(it) },
-                                    implemented = tab.implemented,
-                                    selected = selectedTab == tab,
-                                    onClick = { onSelectTab(tab) },
-                                    modifier = Modifier.weight(1f),
-                                )
-                            }
-                            repeat(3 - rowTabs.size) { Spacer(Modifier.weight(1f)) }
-                        }
-                    }
-                }
-            } else {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                ) {
-                    EditorToolTab.entries.forEach { tab ->
-                        ToolTab(
-                            label = stringResource(tab.labelRes),
-                            hint = tab.hintRes?.let { stringResource(it) },
-                            implemented = tab.implemented,
-                            selected = selectedTab == tab,
-                            onClick = { onSelectTab(tab) },
-                        )
-                    }
-                }
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(MaterialTheme.spacing.sm),
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+        ) {
+            EditorToolTab.entries.forEach { tab ->
+                ToolTab(
+                    label = stringResource(tab.labelRes),
+                    implemented = tab.implemented,
+                    selected = selectedTab == tab,
+                    onClick = { onSelectTab(tab) },
+                )
             }
         }
+        Spacer(Modifier.size(MaterialTheme.spacing.sm))
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        Spacer(Modifier.size(MaterialTheme.spacing.md))
         when (selectedTab) {
             EditorToolTab.BASIC -> BasicAdjustmentsContent(state, onSliderPreview, onSliderCommit)
             EditorToolTab.CURVE -> MasterCurveContent(
@@ -934,37 +913,39 @@ private fun ToolPanel(
 @Composable
 private fun ToolTab(
     label: String,
-    hint: String?,
     implemented: Boolean,
     selected: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val bg = if (selected) EditorPalette.panelRaised else EditorPalette.panel
-    Column(
+    val background = if (selected) {
+        MaterialTheme.colorScheme.primaryContainer
+    } else {
+        MaterialTheme.colorScheme.surfaceContainerHigh
+    }
+    val content = if (selected) {
+        MaterialTheme.colorScheme.onPrimaryContainer
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Row(
         modifier = modifier
-            .background(bg)
-            .border(1.dp, EditorPalette.line)
+            .clip(MaterialTheme.shapes.small)
+            .background(background)
             .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 6.dp),
+            .padding(
+                horizontal = MaterialTheme.spacing.md,
+                vertical = MaterialTheme.spacing.sm,
+            ),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(MaterialTheme.spacing.xs),
     ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelMedium,
-            color = EditorPalette.textPrimary,
-        )
-        if (hint != null) {
-            Text(
-                text = hint,
-                style = MaterialTheme.typography.labelSmall,
-                color = EditorPalette.textSecondary,
-            )
-        }
+        Text(text = label, style = MaterialTheme.typography.labelLarge, color = content)
         if (!implemented) {
             Text(
                 text = stringResource(EditorR.string.editor_not_implemented),
                 style = MaterialTheme.typography.labelSmall,
-                color = EditorPalette.accent,
+                color = MaterialTheme.colorScheme.tertiary,
             )
         }
     }
@@ -1899,21 +1880,21 @@ private fun SliderRow(
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
             Text(
                 text = sliderLabel(id),
-                style = MaterialTheme.typography.bodySmall,
-                color = EditorPalette.textPrimary,
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.weight(1f),
             )
             TextButton(
                 onClick = { dialogOpen = true },
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                    horizontal = 8.dp,
+                    horizontal = MaterialTheme.spacing.sm,
                     vertical = 0.dp,
                 ),
             ) {
                 Text(
                     text = id.formatValue(value),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = EditorPalette.textSecondary,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
@@ -1923,9 +1904,9 @@ private fun SliderRow(
             onValueChangeFinished = { onCommit(id, value) },
             valueRange = id.min.toFloat()..id.max.toFloat(),
             colors = SliderDefaults.colors(
-                thumbColor = EditorPalette.accent,
-                activeTrackColor = EditorPalette.accent,
-                inactiveTrackColor = EditorPalette.line,
+                thumbColor = MaterialTheme.colorScheme.primary,
+                activeTrackColor = MaterialTheme.colorScheme.primary,
+                inactiveTrackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
             ),
         )
     }

@@ -50,4 +50,16 @@
     <string name="library_warn_permission_not_persisted">persistable permission が取得できません（再起動後は再度関連付けが必要）</string>
     <string name="library_msg_fingerprint_failed">指紋計算に失敗: %1$s (%2$s)</string>
     <string name="library_msg_fingerprint_backfill_failed">指紋の遅延計算に失敗: %1$s %2$s</string>
+    <!-- GUI リメイク（ui-android skill / DESIGN_RULES.md） -->
+    <string name="library_title">ライブラリ</string>
+    <string name="library_empty_title">まだ写真がありません</string>
+    <string name="library_empty_body">写真を取り込むと、ここに並びます。元の画像は書き換えません。</string>
+    <string name="library_empty_primary">写真を取り込む</string>
+    <string name="library_empty_secondary">フォルダーから取り込む</string>
+    <string name="library_import_more">その他の取り込み</string>
+    <string name="library_more_actions">その他</string>
+    <plurals name="library_count">
+        <item quantity="one">%1$d 枚</item>
+        <item quantity="other">%1$d 枚</item>
+    </plurals>
 </resources>

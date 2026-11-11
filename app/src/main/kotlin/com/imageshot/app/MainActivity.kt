@@ -15,6 +15,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.imageshot.core.model.ImageOpResult
+import com.imageshot.core.ui.theme.ImageShotTheme
 import com.imageshot.feature.editor.EditorMaskActions
 import com.imageshot.feature.editor.EditorScreen
 import com.imageshot.feature.editor.EditorViewModel

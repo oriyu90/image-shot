@@ -50,6 +50,7 @@ Compose BOM 2025.06.01 / WorkManager 2.10.5。
 |---|---|
 | `app` | 画面遷移、手動 DI、テーマ、署名設定 |
 | `core:model` | 純 Kotlin のレシピ/イベント/マスク仕様 |
+| `core:ui` | デザイントークン（Color/Type/Shape/Spacing）とテーマ |
 | `core:render` | 8bit sRGB CPU パイプライン（preview=export 共有） |
 | `core:database` | Room v1 + append-only 編集履歴 |
 | `core:storage` | SAF/Photo Picker 取り込み、指紋、可用性 |
@@ -71,6 +72,7 @@ Compose BOM 2025.06.01 / WorkManager 2.10.5。
 - `01_製品仕様書.md` / `02_実装定義書.md` / `03_ADR_設計判断記録.md`
 - `06_未実装欠陥と実装計画.md` / `07_Wave3実装計画書.md` / `09_Wave3残作業と以降の実装計画.md`
 - `10_品質精査と修正記録.md` / `11_Sony_ARW検証とアプリアイコン.md` / `12_多解像度UI精査と適応化.md`
+- `DESIGN_RULES.md`（UI の正本・トークン・レスポンシブ規則）
 - `08_文字列台帳.md`（日本語/英語の文字列正本と例外）
 
 ## ライセンス / License

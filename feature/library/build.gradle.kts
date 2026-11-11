@@ -27,6 +27,8 @@ dependencies {
     implementation(project(":core:database"))
     implementation(project(":core:storage"))
 
+    implementation(project(":core:ui"))
+
     api(libs.androidx.activity.compose)
     api(libs.androidx.lifecycle.runtime.compose)
     api(libs.androidx.lifecycle.viewmodel.compose)
@@ -38,6 +40,7 @@ dependencies {
     debugApi(libs.compose.ui.tooling)
     api(libs.compose.ui.tooling.preview)
 
+    implementation(libs.compose.material.icons.extended)
     implementation(libs.coil.compose)
     implementation(libs.kotlinx.coroutines.android)
 
